@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
-    process::Command,
     time::Duration,
 };
 
@@ -66,57 +65,51 @@ impl Api {
     }
     fn refresh(&self) -> Result<String> {
         let db = Store::open(&self.db)?;
-        let account = db.account()?;
-        let mut cmd = gcloud();
-        cmd.args(["auth", "print-access-token"]);
-        if let Some(account) = &account {
-            cmd.arg("--account").arg(account);
+        let credentials = crate::auth::credentials(&db)?;
+        let token = validate_token(crate::auth::token(&credentials)?)?;
+        let email = self.account_for_token(&token)?;
+        if let Some(account) = db.account()? {
+            ensure!(
+                email == account,
+                "credentials belong to a different account; run gdirect login explicitly to switch accounts"
+            );
         }
-        let output = cmd
-            .output()
-            .context("gcloud is required; run gdirect login")?;
-        ensure!(
-            output.status.success(),
-            "gcloud token refresh failed; run gdirect login"
-        );
-        let token = validate_token(String::from_utf8(output.stdout)?.trim().to_owned())?;
-        let account = match account {
-            Some(a) => a,
-            None => active_account()?,
-        };
-        db.save_auth(&account, &token)?;
+        db.set("oauth_credentials", &serde_json::to_string(&credentials)?)?;
+        db.save_auth(&email, &token)?;
         Ok(token)
     }
-    pub fn login(&self, reauth: bool) -> Result<String> {
-        if reauth {
-            let status = gcloud()
-                .args(["auth", "login", "--enable-gdrive-access", "--force"])
-                .status()?;
-            ensure!(status.success(), "gcloud login did not complete");
-        }
-        // Explicit login switches to the currently selected gcloud account.
-        let account = active_account()?;
-        let output = gcloud()
-            .args(["auth", "print-access-token", "--account", &account])
-            .output()?;
-        ensure!(
-            output.status.success(),
-            "gcloud token unavailable; run gdirect login --reauth"
-        );
-        let token = validate_token(String::from_utf8(output.stdout)?.trim().into())?;
+    fn account_for_token(&self, token: &str) -> Result<String> {
         let response = self
             .client
             .get("https://www.googleapis.com/drive/v3/about")
             .query(&[("fields", "user(emailAddress)")])
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .send()
             .map_err(|e| e.without_url())?;
         let data = checked(response)?;
-        let email = data["user"]["emailAddress"]
+        Ok(data["user"]["emailAddress"]
             .as_str()
-            .context("Drive API did not return an account")?;
-        Store::open(&self.db)?.save_auth(email, &token)?;
-        Ok(email.to_owned())
+            .context("Drive API did not return an account")?
+            .into())
+    }
+    pub fn login(
+        &self,
+        reauth: bool,
+        client: Option<&Path>,
+        import: Option<&Path>,
+    ) -> Result<String> {
+        let db = Store::open(&self.db)?;
+        let credentials = crate::auth::prepare_login(&db, client, import, reauth)?;
+        let token = validate_token(crate::auth::token(&credentials)?)?;
+        let email = self.account_for_token(&token)?;
+        db.set("oauth_credentials", &serde_json::to_string(&credentials)?)?;
+        if client.is_some() {
+            db.set("oauth_client", &serde_json::to_string(&serde_json::json!({
+                "client_id": credentials["client_id"], "client_secret": credentials["client_secret"]
+            }))?)?;
+        }
+        db.save_auth(&email, &token)?;
+        Ok(email)
     }
     fn get(&self, path: &str, query: &[(String, String)]) -> Result<serde_json::Value> {
         let token = self.token()?;
@@ -197,22 +190,6 @@ impl Api {
             .unwrap_or_else(|| Ok(Vec::new()))
     }
 }
-fn active_account() -> Result<String> {
-    let out = gcloud()
-        .args([
-            "auth",
-            "list",
-            "--filter=status:ACTIVE",
-            "--format=value(account)",
-        ])
-        .output()?;
-    let account = String::from_utf8(out.stdout)?.trim().to_owned();
-    ensure!(
-        out.status.success() && !account.is_empty(),
-        "no active gcloud account; run gdirect login --reauth"
-    );
-    Ok(account)
-}
 fn validate_token(token: String) -> Result<String> {
     ensure!(
         !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic()),
@@ -225,7 +202,7 @@ fn checked(response: reqwest::blocking::Response) -> Result<serde_json::Value> {
     let data: serde_json::Value = response.json()?;
     ensure!(
         status.is_success(),
-        "Drive API {status}: {}. For insufficient scopes, run gdirect login --reauth",
+        "Drive API {status}: {}. For insufficient scopes, run gdirect login --client-secret PATH",
         data["error"]["message"]
             .as_str()
             .unwrap_or("request failed")
@@ -251,14 +228,6 @@ pub fn safe_name(name: &str) -> String {
 }
 pub fn destination(dir: &Path, file: &File) -> PathBuf {
     dir.join(safe_name(&file.name))
-}
-
-fn gcloud() -> Command {
-    Command::new(if cfg!(windows) {
-        "gcloud.cmd"
-    } else {
-        "gcloud"
-    })
 }
 
 #[cfg(test)]

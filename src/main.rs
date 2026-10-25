@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod download;
 mod drive;
 mod mount;
@@ -36,8 +37,8 @@ struct Cli {
     #[arg(long, global = true)]
     export: Option<String>,
     /// Use authenticated Drive API (also automatic after login)
-    #[arg(long, global = true)]
-    gcloud: bool,
+    #[arg(long = "auth", alias = "gcloud", global = true)]
+    authenticated: bool,
 }
 #[derive(Subcommand, Clone)]
 enum Commands {
@@ -48,10 +49,16 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Import gcloud credentials and verify Drive API access
+    /// Sign in with a Desktop OAuth client JSON; no gcloud installation needed
     Login {
         #[arg(long)]
         reauth: bool,
+        /// Google Desktop OAuth client JSON (opens browser)
+        #[arg(long, conflicts_with = "credentials")]
+        client_secret: Option<PathBuf>,
+        /// Import existing authorized_user credentials
+        #[arg(long, conflicts_with = "reauth")]
+        credentials: Option<PathBuf>,
     },
     /// Browse folders; j/k navigate, Enter open, d download, +/- connections
     Browse {
@@ -136,8 +143,12 @@ fn run(mut cli: Cli) -> Result<()> {
         }) => {
             mount::run(&api, path.as_deref(), read_only, foreground, connections)?;
         }
-        Some(Commands::Login { reauth }) => {
-            let email = api.login(reauth)?;
+        Some(Commands::Login {
+            reauth,
+            client_secret,
+            credentials,
+        }) => {
+            let email = api.login(reauth, client_secret.as_deref(), credentials.as_deref())?;
             println!("Logged in: {email}\nSQLite: {}", api.db.display());
         }
         Some(Commands::Ls { folder, json }) => {
@@ -199,7 +210,7 @@ fn start_download(
     file: String,
     connections: u8,
 ) -> Result<()> {
-    let token = if cli.gcloud
+    let token = if cli.authenticated
         || db.account()?.is_some()
         || std::env::var_os("GDIRECT_ACCESS_TOKEN").is_some()
     {

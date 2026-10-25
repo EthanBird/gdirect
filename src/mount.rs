@@ -19,24 +19,6 @@ fn default_mount() -> Result<PathBuf> {
         .context("cannot locate home directory")?
         .join("GoogleDrive"))
 }
-fn gcloud() -> Command {
-    Command::new(if cfg!(windows) {
-        "gcloud.cmd"
-    } else {
-        "gcloud"
-    })
-}
-fn output(args: &[&str]) -> Result<String> {
-    let result = gcloud()
-        .args(args)
-        .output()
-        .context("Google Cloud CLI is required")?;
-    ensure!(
-        result.status.success(),
-        "gcloud ADC unavailable; run gcloud auth login --enable-gdrive-access --update-adc"
-    );
-    Ok(String::from_utf8(result.stdout)?.trim().into())
-}
 pub fn run(
     api: &Api,
     path: Option<&Path>,
@@ -49,47 +31,47 @@ pub fn run(
         .output()
         .context("install rclone first (macOS: brew install rclone)")?;
     ensure!(version.status.success(), "rclone is unavailable");
+    let version_text = String::from_utf8_lossy(&version.stdout);
+    let number = version_text
+        .lines()
+        .next()
+        .unwrap_or("")
+        .strip_prefix("rclone v")
+        .unwrap_or("");
+    let parts: Vec<u32> = number
+        .split('.')
+        .take(3)
+        .map(|part| {
+            part.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
+        .collect();
+    ensure!(
+        parts.len() == 3 && (parts[0], parts[1], parts[2]) >= (1, 75, 2),
+        "rclone 1.75.2+ is required for mounting; update it using the installer or brew upgrade rclone"
+    );
+    if cfg!(target_os = "linux") {
+        let fuse = Command::new("fusermount3")
+            .arg("--version")
+            .output()
+            .context(
+                "mounting requires FUSE3 (fusermount3); run the installer with --with-mount",
+            )?;
+        ensure!(fuse.status.success(), "fusermount3 is unavailable");
+    }
+
     let db = Store::open(&api.db)?;
     ensure!(
         db.setting("mount")?.is_none(),
         "a mount is already recorded; run gdirect unmount first"
     );
-    let config_dir = output(&["info", "--format=value(config.paths.global_config_dir)"])?;
-    let credentials = Path::new(&config_dir).join("application_default_credentials.json");
-    ensure!(
-        credentials.is_file(),
-        "mount needs refreshable ADC; run gcloud auth login --enable-gdrive-access --update-adc"
-    );
-    // Explicitly select the same ADC file for validation and for the daemon.
-    let token = gcloud()
-        .args(["auth", "application-default", "print-access-token"])
-        .env("GOOGLE_APPLICATION_CREDENTIALS", &credentials)
-        .output()?;
-    ensure!(
-        token.status.success(),
-        "ADC refresh failed; run gcloud auth login --enable-gdrive-access --update-adc"
-    );
-    let token = String::from_utf8(token.stdout)?;
-    let response = api
-        .client
-        .get("https://www.googleapis.com/drive/v3/about")
-        .query(&[("fields", "user(emailAddress)")])
-        .bearer_auth(token.trim())
-        .send()
-        .map_err(|e| e.without_url())?;
-    ensure!(
-        response.status().is_success(),
-        "ADC lacks Drive access; run gcloud auth login --enable-gdrive-access --update-adc"
-    );
-    let user: serde_json::Value = response.json()?;
-    let email = user["user"]["emailAddress"]
-        .as_str()
-        .context("missing ADC account")?;
+    api.download_token()?;
+    let credentials_data = crate::auth::credentials(&db)?;
     let account = db.account()?.context("run gdirect login first")?;
-    ensure!(
-        email == account,
-        "ADC belongs to a different account; select the same gcloud account before mounting"
-    );
+    let email = account.as_str();
     let path = path
         .map(Path::to_path_buf)
         .map(Ok)
@@ -125,6 +107,8 @@ pub fn run(
         .join("mount")
         .join(crate::api::safe_name(email));
     fs::create_dir_all(&state)?;
+    let credentials = state.join("credentials.json");
+    crate::auth::export_credentials(&credentials_data, &credentials)?;
     let config = state.join("rclone.conf");
     fs::write(&config, "[gdirect]\ntype = drive\nenv_auth = true\n")?;
     let log = state.join("rclone.log");
