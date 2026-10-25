@@ -149,9 +149,25 @@ fn download(
     };
     ensure!(
         code == 0,
-        "libaria2 failed (code {code}); 1=general/TLS failure, 2=timeout, 3=not found, 6=network, 22=HTTP error, 24=authorization. Check IP/SNI, file permissions, Drive quota and OAuth scope; partial data is retained."
+        "download failed: {} (libaria2 code {code}); partial data is kept, rerun to resume",
+        aria2_error(code)
     );
     Ok(())
+}
+fn aria2_error(code: i32) -> &'static str {
+    match code {
+        1 => "connection or TLS failure; try another --ip or --sni",
+        2 => "timed out; try another --ip or rerun gdirect scan",
+        3 => "file not found or not shared with this account",
+        6 => "network problem",
+        9 => "not enough disk space",
+        13 => "output file already exists",
+        15..=18 => "cannot write the output file",
+        19 => "name resolution failed",
+        22 => "Drive returned an HTTP error (quota, permission or download limit)",
+        24 => "Drive rejected the authorization; run gdirect login --reauth",
+        _ => "libaria2 error",
+    }
 }
 
 pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
