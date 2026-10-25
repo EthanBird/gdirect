@@ -85,7 +85,7 @@ impl Api {
         let mut session = saved.filter(|s| s.size == size && s.modified == modified);
         if let Some(s) = &session {
             let mut resumed = false;
-            for attempt in 0..6 {
+            for attempt in 0..12 {
                 let response = self
                     .client
                     .put(session_url(&s.url)?)
@@ -118,11 +118,11 @@ impl Api {
                         resumed = true;
                         break;
                     }
-                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 5 => {
-                        std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 11 => {
+                        std::thread::sleep(Duration::from_secs(2));
                     }
-                    _ if response.status().is_server_error() && attempt < 5 => {
-                        std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                    _ if response.status().is_server_error() && attempt < 11 => {
+                        std::thread::sleep(Duration::from_secs(2));
                     }
                     _ => return Err(failure(response)),
                 }
@@ -257,6 +257,26 @@ impl Api {
                         || r.status() == StatusCode::TOO_MANY_REQUESTS
                         || r.status() == StatusCode::FORBIDDEN =>
                 {
+                    if probe
+                        && let Ok(existing) = self.list(parent)
+                        && let Some(done) = existing.into_iter().find(|f| {
+                            !f.folder()
+                                && f.name == name
+                                && f.size.as_deref() == Some(&size.to_string())
+                        })
+                    {
+                        db.unset(&key)?;
+                        let _ = db.record_activity(
+                            "UPLOAD",
+                            "COMPLETED",
+                            name,
+                            Some(&done.id),
+                            Some(size),
+                            Some(&format!("parent={parent} (verified)")),
+                        );
+                        eprintln!("\rUploaded {size}/{size} bytes");
+                        return Ok(done);
+                    }
                     failures += 1;
                     probe = true;
                 }
@@ -266,11 +286,11 @@ impl Api {
                 }
                 Ok(r) => return Err(failure(r)),
             }
-            if failures >= 10 {
+            if failures >= 20 {
                 bail!("upload interrupted; rerun the same command to resume");
             }
             if failures > 0 {
-                std::thread::sleep(Duration::from_secs((1u64 << failures.min(4)).min(15)));
+                std::thread::sleep(Duration::from_secs(3));
             }
         }
     }
