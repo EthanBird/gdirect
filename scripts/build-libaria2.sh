@@ -10,7 +10,11 @@ archive="$root/target/vendor/aria2-$version.tar.xz"
 if [ ! -f "$archive" ]; then
   curl --fail --location --retry 3 "https://github.com/aria2/aria2/releases/download/release-$version/aria2-$version.tar.xz" -o "$archive"
 fi
-printf '%s  %s\n' "$sha" "$archive" | shasum -a 256 -c -
+if command -v sha256sum >/dev/null; then
+  printf '%s  %s\n' "$sha" "$archive" | sha256sum -c -
+else
+  printf '%s  %s\n' "$sha" "$archive" | shasum -a 256 -c -
+fi
 rm -rf "target/vendor/aria2-$version"
 tar -xf "$archive" -C target/vendor
 cd "target/vendor/aria2-$version"
@@ -18,11 +22,17 @@ patch -p1 < "$root/vendor/aria2-$version.patch"
 cp "$root/vendor/gdirect_route.h" src/
 if [ "$(uname -s)" = Darwin ]; then
   openssl_prefix="${OPENSSL_PREFIX:-$(brew --prefix openssl@3)}"
-  export OPENSSL_CFLAGS="-I$openssl_prefix/include"
-  export OPENSSL_LIBS="-L$openssl_prefix/lib -lssl -lcrypto"
+  export OPENSSL_PREFIX="$openssl_prefix"
 fi
+if [ -n "${OPENSSL_PREFIX:-}" ]; then
+  export OPENSSL_CFLAGS="-I$OPENSSL_PREFIX/include"
+  export OPENSSL_LIBS="-L$OPENSSL_PREFIX/lib -lssl -lcrypto"
+fi
+# No iconv dependency is needed by this HTTP-only build.
+export am_cv_func_iconv=no
+export ac_cv_header_iconv_h=no
 ./configure --prefix="$prefix" --enable-libaria2 --enable-static --disable-shared \
-  --with-openssl --without-appletls --without-gnutls --without-libnettle \
+  --with-openssl --without-wintls --without-appletls --without-gnutls --without-libnettle \
   --without-libgmp --without-libgcrypt --without-libcares --without-libssh2 \
   --without-sqlite3 --without-libxml2 --without-libexpat --without-libz \
   --disable-bittorrent --disable-metalink --disable-websocket --disable-nls \

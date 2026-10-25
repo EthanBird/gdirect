@@ -67,7 +67,7 @@ impl Api {
     fn refresh(&self) -> Result<String> {
         let db = Store::open(&self.db)?;
         let account = db.account()?;
-        let mut cmd = Command::new("gcloud");
+        let mut cmd = gcloud();
         cmd.args(["auth", "print-access-token"]);
         if let Some(account) = &account {
             cmd.arg("--account").arg(account);
@@ -89,14 +89,14 @@ impl Api {
     }
     pub fn login(&self, reauth: bool) -> Result<String> {
         if reauth {
-            let status = Command::new("gcloud")
+            let status = gcloud()
                 .args(["auth", "login", "--enable-gdrive-access", "--force"])
                 .status()?;
             ensure!(status.success(), "gcloud login did not complete");
         }
         // Explicit login switches to the currently selected gcloud account.
         let account = active_account()?;
-        let output = Command::new("gcloud")
+        let output = gcloud()
             .args(["auth", "print-access-token", "--account", &account])
             .output()?;
         ensure!(
@@ -198,7 +198,7 @@ impl Api {
     }
 }
 fn active_account() -> Result<String> {
-    let out = Command::new("gcloud")
+    let out = gcloud()
         .args([
             "auth",
             "list",
@@ -252,6 +252,15 @@ pub fn safe_name(name: &str) -> String {
 pub fn destination(dir: &Path, file: &File) -> PathBuf {
     dir.join(safe_name(&file.name))
 }
+
+fn gcloud() -> Command {
+    Command::new(if cfg!(windows) {
+        "gcloud.cmd"
+    } else {
+        "gcloud"
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -110,8 +110,9 @@ fn download(
         .map(|s| CString::new(if s == "off" { "" } else { s }))
         .transpose()?;
     let token = CString::new(token.unwrap_or_default())?;
+    let ca_path = args.ca_cert.clone().or_else(bundled_ca);
     let ca = CString::new(
-        args.ca_cert
+        ca_path
             .as_ref()
             .map(|p| p.to_str().context("CA path must be UTF-8"))
             .transpose()?
@@ -221,4 +222,9 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
         return Ok(());
     }
     unreachable!()
+}
+
+fn bundled_ca() -> Option<PathBuf> {
+    let path = std::env::current_exe().ok()?.parent()?.join("cacert.pem");
+    path.is_file().then_some(path)
 }

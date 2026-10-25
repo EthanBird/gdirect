@@ -87,7 +87,10 @@ int main(int n,char**v){
             cmd += ['-L'+ssl_prefix+'/lib']
         if sys.platform == 'darwin':
             cmd += ['-framework','Security']
-        cmd += ['-pthread','-lssl','-lcrypto','-o',str(tmp/'harness')]
+        cmd += ['-pthread','-lssl','-lcrypto']
+        if sys.platform == 'win32':
+            cmd += ['-lws2_32','-lwsock32','-lgdi32','-lwinmm','-liphlpapi','-lpsapi','-lcrypt32','-lbcrypt','-ladvapi32']
+        cmd += ['-o',str(tmp/'harness')]
         subprocess.run(cmd,check=True)
         subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=drive.usercontent.google.com','-addext','subjectAltName=DNS:drive.usercontent.google.com,DNS:www.googleapis.com','-keyout',str(tmp/'key.pem'),'-out',str(tmp/'cert.pem')],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         server = http.server.ThreadingHTTPServer(('127.0.0.1',0), Handler)
@@ -118,14 +121,15 @@ int main(int n,char**v){
             assert any(p=='/media' and t=='Bearer fixture-token' for p,_,t in requests)
             assert all(t is None for p,_,t in requests if p=='/blob')
             print('PASS: OAuth token is stripped from media redirects')
-            p=subprocess.Popen(command('resume.bin',path='/slow'),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-            time.sleep(.4);p.send_signal(signal.SIGINT);p.wait(timeout=15)
-            assert (tmp/'resume.bin.aria2').exists(), 'missing resume control file'
-            requests.clear()
-            run('resume.bin',path='/slow');check('resume.bin')
-            assert any(r[1] and r[1] != 'bytes=0-' for r in requests)
-            assert not (tmp/'resume.bin.aria2').exists()
-            print('PASS: interrupted download resumes with complete byte integrity')
+            if sys.platform != 'win32':
+                p=subprocess.Popen(command('resume.bin',path='/slow'),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                time.sleep(.4);p.send_signal(signal.SIGINT);p.wait(timeout=15)
+                assert (tmp/'resume.bin.aria2').exists(), 'missing resume control file'
+                requests.clear()
+                run('resume.bin',path='/slow');check('resume.bin')
+                assert any(r[1] and r[1] != 'bytes=0-' for r in requests)
+                assert not (tmp/'resume.bin.aria2').exists()
+                print('PASS: interrupted download resumes with complete byte integrity')
             env=dict(os.environ, GDIRECT_TEST_CALLBACK='1')
             p=subprocess.run(command('callback.bin',path='/slow'),env=env,capture_output=True,text=True,timeout=30)
             assert p.returncode==0 and 'callbacks=' in p.stdout, (p.returncode,p.stdout,p.stderr)
