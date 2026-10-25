@@ -19,6 +19,8 @@ struct Session {
     size: u64,
     modified: u128,
     url: String,
+    #[serde(default)]
+    offset: u64,
 }
 
 // Session URLs are credentials: keep them in the private SQLite database and
@@ -142,7 +144,7 @@ impl Api {
                 bail!("upload resume probe temporarily rate-limited; retry to resume from saved offset");
             }
         }
-        let session = match session {
+        let mut session = match session {
             Some(s) => s,
             None => {
                 let mut raw_loc = None;
@@ -190,6 +192,7 @@ impl Api {
                     size,
                     modified,
                     url: session_url(&raw)?.into(),
+                    offset: 0,
                 };
                 db.set(&key, &serde_json::to_string(&s)?)?;
                 s
@@ -255,6 +258,8 @@ impl Api {
                         failures = 0;
                     }
                     start = next;
+                    session.offset = start;
+                    let _ = db.set(&key, &serde_json::to_string(&session)?);
                     probe = false;
                     eprint!("\rUploading {start}/{size} bytes");
                 }

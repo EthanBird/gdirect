@@ -283,8 +283,28 @@ fn run(cli: Cli) -> Result<()> {
                 let active = db.active_uploads()?;
                 if !active.is_empty() {
                     println!("=== In-Progress Resumable Upload Sessions ({}) ===", active.len());
-                    for (k, _) in &active {
-                        println!("  ACTIVE  {}", k.trim_start_matches("upload:"));
+                    for (k, v) in &active {
+                        let meta: serde_json::Value = serde_json::from_str(v).unwrap_or_default();
+                        let size = meta["size"].as_u64().unwrap_or(0);
+                        let offset = meta["offset"].as_u64().unwrap_or(0);
+                        let pct = if size > 0 {
+                            (offset as f64 / size as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        let key_info: serde_json::Value =
+                            serde_json::from_str(k.trim_start_matches("upload:"))
+                                .unwrap_or_default();
+                        let fname = key_info
+                            .get(2)
+                            .and_then(|s| s.as_str())
+                            .unwrap_or_else(|| k.trim_start_matches("upload:"));
+                        println!(
+                            "  ACTIVE  {fname}  [{:.1}% · {:.1} / {:.1} MB]",
+                            pct,
+                            offset as f64 / (1024.0 * 1024.0),
+                            size as f64 / (1024.0 * 1024.0)
+                        );
                     }
                     println!();
                 }
