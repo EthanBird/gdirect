@@ -1,6 +1,7 @@
 mod api;
 mod download;
 mod drive;
+mod scan;
 mod store;
 mod tui;
 use anyhow::{Context, Result};
@@ -38,6 +39,13 @@ struct Cli {
 }
 #[derive(Subcommand, Clone)]
 enum Commands {
+    /// Probe Google endpoints and save working IPs in SQLite
+    Scan {
+        #[arg(long)]
+        ips: Option<PathBuf>,
+        #[arg(long)]
+        list: bool,
+    },
     /// Import gcloud credentials and verify Drive API access
     Login {
         #[arg(long)]
@@ -58,7 +66,7 @@ enum Commands {
     /// Download a file ID or sharing URL
     Download { file: String },
 }
-fn run(cli: Cli) -> Result<()> {
+fn run(mut cli: Cli) -> Result<()> {
     let db_path = cli.db.clone().map(Ok).unwrap_or_else(store::default_path)?;
     let db = store::Store::open(&db_path)?;
     let connections = cli
@@ -74,8 +82,30 @@ fn run(cli: Cli) -> Result<()> {
     if cli.connections.is_some() {
         db.set("connections", &connections.to_string())?;
     }
+    if let Some(Commands::Scan { ips, list }) = &cli.command {
+        if *list {
+            for (ip, latency, available) in db.endpoints()? {
+                println!(
+                    "{}\t{}\t{}",
+                    ip,
+                    if available { "OK" } else { "unavailable" },
+                    latency.map(|v| format!("{v} ms")).unwrap_or_default()
+                );
+            }
+        } else {
+            scan::run(&db, ips.as_deref())?;
+        }
+        return Ok(());
+    }
+    if cli.ip.is_none() {
+        cli.ip = Some(match db.best_ip()? {
+            Some(ip) => ip,
+            None => scan::run(&db, None)?,
+        });
+    }
     let api = api::Api::new(db_path, cli.ip)?;
     match cli.command.clone() {
+        Some(Commands::Scan { .. }) => unreachable!(),
         Some(Commands::Login { reauth }) => {
             let email = api.login(reauth)?;
             println!("Logged in: {email}\nSQLite: {}", api.db.display());
@@ -203,5 +233,6 @@ mod tests {
         assert!(Cli::try_parse_from(["gdirect", "browse", "-j", "0"]).is_err());
         let cli = Cli::try_parse_from(["gdirect", "file_id", "-o", "out.bin"]).unwrap();
         assert_eq!(cli.file.as_deref(), Some("file_id"));
+        assert!(Cli::try_parse_from(["gdirect", "scan", "--list"]).is_ok());
     }
 }

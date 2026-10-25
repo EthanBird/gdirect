@@ -47,11 +47,31 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS endpoints(ip TEXT PRIMARY KEY,latency_ms INTEGER,verified_at INTEGER NOT NULL,available INTEGER NOT NULL,error TEXT);
+            CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS auth(id INTEGER PRIMARY KEY CHECK(id=1),account TEXT NOT NULL,token TEXT NOT NULL,expires_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,json TEXT NOT NULL,updated_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS downloads(id INTEGER PRIMARY KEY,file_id TEXT NOT NULL,name TEXT NOT NULL,path TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL);")?;
         Ok(Self { conn })
+    }
+    pub fn endpoint(&self, ip: &str, latency: Option<i64>, error: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO endpoints VALUES(?,?,?,?,?)",
+            params![ip, latency, now(), i32::from(latency.is_some()), error],
+        )?;
+        Ok(())
+    }
+    pub fn best_ip(&self) -> Result<Option<std::net::IpAddr>> {
+        let ip:Option<String>=self.conn.query_row("SELECT ip FROM endpoints WHERE available=1 AND verified_at>? ORDER BY latency_ms LIMIT 1",[now()-86400],|r|r.get(0)).optional()?;
+        ip.map(|s| s.parse().map_err(Into::into)).transpose()
+    }
+    pub fn endpoints(&self) -> Result<Vec<(String, Option<i64>, bool)>> {
+        let mut query = self.conn.prepare(
+            "SELECT ip,latency_ms,available FROM endpoints ORDER BY available DESC,latency_ms",
+        )?;
+        Ok(query
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self
@@ -123,6 +143,22 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endpoints_require_recent_success() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE endpoints(ip TEXT PRIMARY KEY,latency_ms INTEGER,verified_at INTEGER,available INTEGER,error TEXT);").unwrap();
+        let db = Store { conn };
+        db.endpoint("183.56.143.147", Some(40), None).unwrap();
+        db.endpoint("8.8.8.8", Some(80), None).unwrap();
+        assert_eq!(db.best_ip().unwrap().unwrap().to_string(), "183.56.143.147");
+        db.endpoint("183.56.143.147", None, Some("timeout"))
+            .unwrap();
+        assert_eq!(db.best_ip().unwrap().unwrap().to_string(), "8.8.8.8");
+        db.conn
+            .execute("UPDATE endpoints SET verified_at=0", [])
+            .unwrap();
+        assert!(db.best_ip().unwrap().is_none());
+    }
     #[test]
     fn expired_tokens_and_settings() {
         let conn = Connection::open_in_memory().unwrap();
