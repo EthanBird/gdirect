@@ -12,7 +12,8 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const CHUNK: u64 = 32 * 1024 * 1024;
+const CHUNK: u64 = 16 * 1024 * 1024;
+const FINAL_SLICE: u64 = 1024 * 1024;
 const FIELDS: &str = "id,name,mimeType,size,md5Checksum";
 #[derive(Serialize, Deserialize)]
 struct Session {
@@ -218,7 +219,15 @@ impl Api {
                     .header("Content-Range", format!("bytes */{size}"))
                     .header("Content-Length", 0);
             } else {
-                let count = (size - start).min(CHUNK);
+                let rem = size - start;
+                let count = if rem <= CHUNK && rem > FINAL_SLICE {
+                    // Align to 256 KiB multiple leaving at most FINAL_SLICE for the final commit PUT
+                    let target = rem - FINAL_SLICE;
+                    let aligned = (target / (256 * 1024)) * (256 * 1024);
+                    if aligned > 0 { aligned } else { rem }
+                } else {
+                    rem.min(CHUNK)
+                };
                 file.seek(SeekFrom::Start(start))?;
                 let mut bytes = vec![0; count as usize];
                 file.read_exact(&mut bytes)?;
@@ -273,10 +282,7 @@ impl Api {
                         || r.status() == StatusCode::TOO_MANY_REQUESTS
                         || r.status() == StatusCode::FORBIDDEN =>
                 {
-                    // When the final chunk triggers a rate limit on metadata creation,
-                    // retry sending the final chunk directly instead of switching to probe
-                    // unless it was an intermediate chunk.
-                    let is_final_chunk = start + CHUNK >= size;
+                    let is_final_chunk = start + FINAL_SLICE >= size;
                     failures += 1;
                     if !is_final_chunk {
                         probe = true;
