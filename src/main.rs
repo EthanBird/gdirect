@@ -1,6 +1,7 @@
 mod api;
 mod download;
 mod drive;
+mod mount;
 mod scan;
 mod store;
 mod tui;
@@ -64,6 +65,16 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Mount Drive locally using rclone (macOS NFS; Linux/Windows FUSE)
+    Mount {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        read_only: bool,
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Unmount this database's background mount
+    Unmount,
     /// Upload a local file (repeat the command to resume)
     Upload {
         file: PathBuf,
@@ -106,6 +117,9 @@ fn run(mut cli: Cli) -> Result<()> {
         }
         return Ok(());
     }
+    if matches!(cli.command, Some(Commands::Unmount)) {
+        return mount::unmount(&db);
+    }
     if cli.ip.is_none() {
         cli.ip = Some(match db.best_ip()? {
             Some(ip) => ip,
@@ -114,7 +128,14 @@ fn run(mut cli: Cli) -> Result<()> {
     }
     let api = api::Api::new(db_path, cli.ip)?;
     match cli.command.clone() {
-        Some(Commands::Scan { .. }) => unreachable!(),
+        Some(Commands::Scan { .. } | Commands::Unmount) => unreachable!(),
+        Some(Commands::Mount {
+            path,
+            read_only,
+            foreground,
+        }) => {
+            mount::run(&api, path.as_deref(), read_only, foreground, connections)?;
+        }
         Some(Commands::Login { reauth }) => {
             let email = api.login(reauth)?;
             println!("Logged in: {email}\nSQLite: {}", api.db.display());
