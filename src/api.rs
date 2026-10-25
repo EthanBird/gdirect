@@ -133,12 +133,7 @@ impl Api {
         checked(response)
     }
     pub fn list(&self, folder: &str) -> Result<Vec<File>> {
-        ensure!(
-            folder
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'),
-            "invalid folder ID"
-        );
+        ensure!(crate::drive::valid_id(folder), "invalid folder ID");
         let mut files = Vec::new();
         let mut page = String::new();
         loop {
@@ -188,7 +183,7 @@ impl Api {
             .unwrap_or_else(|| Ok(Vec::new()))
     }
 }
-fn validate_token(token: String) -> Result<String> {
+pub fn validate_token(token: String) -> Result<String> {
     ensure!(
         !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic()),
         "invalid access token"

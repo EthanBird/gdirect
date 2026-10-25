@@ -164,13 +164,11 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
             "invalid SNI hostname"
         );
     }
-    let token = args.token.clone();
-    if let Some(token) = &token {
-        ensure!(
-            !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic()),
-            "invalid access token"
-        );
-    }
+    let token = args
+        .token
+        .clone()
+        .map(crate::api::validate_token)
+        .transpose()?;
     let mut url = file.url(token.is_some(), args.export.as_deref())?;
     // Never treat an unrelated existing file as a resumable download.
     let control = PathBuf::from(format!("{}.aria2", args.output.display()));

@@ -70,13 +70,7 @@ impl Api {
             .or_else(|| path.file_name().and_then(|s| s.to_str()))
             .context("file name must be UTF-8; use --name")?;
         ensure!(!name.is_empty(), "file name cannot be empty");
-        ensure!(
-            !parent.is_empty()
-                && parent
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
-            "invalid parent folder ID"
-        );
+        ensure!(crate::drive::valid_id(parent), "invalid parent folder ID");
         let db = Store::open(&self.db)?;
         let key = format!(
             "upload:{}",

@@ -8,7 +8,7 @@ pub struct FileRef {
     pub id: String,
     pub resource_key: Option<String>,
 }
-fn valid_id(s: &str) -> bool {
+pub fn valid_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 256
         && s.bytes()
