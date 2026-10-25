@@ -58,6 +58,6 @@ The default mount directory is `~/GoogleDrive`; Windows uses foreground mode and
 - `redirect_uri_mismatch`: use a **Desktop app** client, not a web client.
 - Drive API disabled / insufficient permissions: enable Drive API in the same client project, then repeat browser login and grant the Drive scope.
 - With an External app in Testing, Drive refresh credentials expire after **7 days**. Reauthorize, or follow Google’s production/verification requirements for longer-lived authorization. See [Google’s token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration).
-- If a refresh credential expires or is revoked, run `gdirect login --reauth` (or supply the client JSON again).
-- Headless servers: authorize on a computer with a browser, then securely transfer the gdirect SQLite database or import an `authorized_user` credentials JSON. Treat these files like passwords; do not commit them or share them with others.
+- If a refresh credential expires or is revoked, run `gdirect login --reauth` (or supply the client JSON again). Unmount and remount an existing mount after reauthorizing, so its background process uses the new credentials.
+- Headless servers can import an existing `authorized_user` credentials JSON with `--credentials PATH`. Browser login needs a browser on the same computer. Treat credential JSON and SQLite files like passwords; do not commit them or share them with others.
 - Check `gdirect --version`: **0.1.0 still uses gcloud**. Upgrade before following this guide.

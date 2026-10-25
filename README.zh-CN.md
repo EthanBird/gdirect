@@ -36,7 +36,7 @@ sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsS
 sudo dnf install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
 
 # Arch / Manjaro
-sudo pacman -S --needed curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+sudo pacman -S --needed --noconfirm curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
 
 # openSUSE（glibc >= 2.35）
 sudo zypper --non-interactive install curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount

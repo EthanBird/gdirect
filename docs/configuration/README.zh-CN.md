@@ -58,6 +58,6 @@ gdirect unmount
 - `redirect_uri_mismatch`：请下载**桌面应用**客户端 JSON，不要使用网页客户端。
 - Drive API 未启用 / 权限不足：确认客户端所属项目已启用 Drive API，再重新登录并授予 Drive 权限。
 - 外部应用处于 Testing 时，Drive 刷新凭据会在 **7 天后过期**。届时重新授权，或按 Google 要求调整发布状态并完成所需验证。详见 [Google 的令牌到期规则](https://developers.google.com/identity/protocols/oauth2#expiration)。
-- 刷新凭据过期或被撤销：执行 `gdirect login --reauth`，或重新指定客户端 JSON。
-- 无浏览器的服务器：先在有浏览器的电脑上授权，再安全传送 gdirect 的 SQLite 数据库，或导入 `authorized_user` 凭据 JSON。这些文件应像密码一样保管，不要提交到 Git 或分享给别人。
+- 刷新凭据过期或被撤销：执行 `gdirect login --reauth`，或重新指定客户端 JSON。已有挂载需卸载后重新挂载，让后台进程使用新凭据。
+- 无浏览器的服务器可用 `--credentials 路径` 导入已有的 `authorized_user` 凭据 JSON；浏览器登录需要在同一台电脑上打开浏览器。凭据 JSON 和 SQLite 应像密码一样保管，不要提交到 Git 或分享给别人。
 - 先确认 `gdirect --version`：**0.1.0 仍依赖 gcloud**，请升级后再按本文配置。
