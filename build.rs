@@ -20,7 +20,8 @@ fn main() {
             "gnu",
             "Windows builds use the MinGW GNU toolchain"
         );
-        bridge.cpp_link_stdlib_static(true);
+        // Emit the C++ runtime after libaria2: GNU archives are searched left to right.
+        bridge.cpp_link_stdlib(None);
         let output = Command::new("g++")
             .arg("-print-file-name=libstdc++.a")
             .output()
@@ -36,6 +37,9 @@ fn main() {
         prefix.join("lib").display()
     );
     println!("cargo:rustc-link-lib=static=aria2");
+    if os == "windows" {
+        println!("cargo:rustc-link-lib=static=stdc++");
+    }
     let ssl = env::var("OPENSSL_PREFIX").ok().or_else(|| {
         (os == "macos").then(|| {
             let out = Command::new("brew")
