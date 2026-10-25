@@ -260,6 +260,14 @@ impl Store {
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?)
     }
+    pub fn active_downloads(&self) -> Result<Vec<(String, String)>> {
+        let mut query = self
+            .conn
+            .prepare("SELECT key,value FROM settings WHERE key LIKE 'download:%'")?;
+        Ok(query
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
 }
 
 #[cfg(test)]

@@ -280,6 +280,33 @@ fn run(cli: Cli) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
+                let active_dl = db.active_downloads()?;
+                if !active_dl.is_empty() {
+                    println!("=== In-Progress Multi-Connection Downloads ({}) ===", active_dl.len());
+                    for (k, v) in &active_dl {
+                        let meta: serde_json::Value = serde_json::from_str(v).unwrap_or_default();
+                        let total = meta["total"].as_u64().unwrap_or(0);
+                        let done = meta["done"].as_u64().unwrap_or(0);
+                        let speed = meta["speed"].as_u64().unwrap_or(0);
+                        let conns = meta["connections"].as_i64().unwrap_or(1);
+                        let fname = meta["name"]
+                            .as_str()
+                            .unwrap_or_else(|| k.trim_start_matches("download:"));
+                        let pct = if total > 0 {
+                            (done as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        println!(
+                            "  DOWNLOAD  {fname}  [{:.1}% · {:.1} / {:.1} MB · {:.2} MB/s · {conns} conns]",
+                            pct,
+                            done as f64 / (1024.0 * 1024.0),
+                            total as f64 / (1024.0 * 1024.0),
+                            speed as f64 / (1024.0 * 1024.0)
+                        );
+                    }
+                    println!();
+                }
                 let active = db.active_uploads()?;
                 if !active.is_empty() {
                     println!("=== In-Progress Resumable Upload Sessions ({}) ===", active.len());

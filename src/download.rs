@@ -163,6 +163,10 @@ fn download(
     let parent = output.parent().context("output needs a parent directory")?;
     fs::create_dir_all(parent)?;
     let control_path = PathBuf::from(format!("{}.aria2", output.display()));
+    let dl_key = format!("download:{}", output.display());
+    let db = crate::store::default_path()
+        .ok()
+        .and_then(|p| crate::store::Store::open(&p).ok());
 
     let _lock = SESSION
         .lock()
@@ -293,6 +297,19 @@ fn download(
             segments,
         };
         fs::write(&control_path, serde_json::to_string(&s)?)?;
+        if let Some(db) = &db {
+            let _ = db.set(
+                &dl_key,
+                &serde_json::json!({
+                    "name": output.file_name().unwrap_or_default().to_string_lossy(),
+                    "done": 0,
+                    "total": total_size,
+                    "speed": 0,
+                    "connections": num_conns
+                })
+                .to_string(),
+            );
+        }
         s
     };
 
@@ -426,12 +443,25 @@ fn download(
             } else {
                 eprint!("\rDownloading: {} KiB/s", speed / 1024);
             }
-            if last_save.elapsed() >= Duration::from_secs(2) {
+            if last_save.elapsed() >= Duration::from_millis(500) {
                 let snap = state_arc.lock().unwrap().clone();
                 let _ = fs::write(
                     &control_path,
                     serde_json::to_string(&snap).unwrap_or_default(),
                 );
+                if let Some(db) = &db {
+                    let _ = db.set(
+                        &dl_key,
+                        &serde_json::json!({
+                            "name": output.file_name().unwrap_or_default().to_string_lossy(),
+                            "done": done,
+                            "total": total_size,
+                            "speed": speed,
+                            "connections": conns
+                        })
+                        .to_string(),
+                    );
+                }
                 last_save = Instant::now();
             }
         }
@@ -457,6 +487,9 @@ fn download(
         "download incomplete; partial data is kept, rerun to resume"
     );
     let _ = fs::remove_file(&control_path);
+    if let Some(db) = &db {
+        let _ = db.unset(&dl_key);
+    }
     Ok(())
 }
 
