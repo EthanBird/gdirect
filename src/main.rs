@@ -17,8 +17,6 @@ use std::{net::IpAddr, path::PathBuf};
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    /// Legacy download: file ID or sharing URL
-    file: Option<String>,
     /// Output file; in browse mode, download directory
     #[arg(short, long, global = true)]
     output: Option<PathBuf>,
@@ -36,9 +34,6 @@ struct Cli {
     ca_cert: Option<PathBuf>,
     #[arg(long, global = true)]
     export: Option<String>,
-    /// Use authenticated Drive API (also automatic after login)
-    #[arg(long = "auth", alias = "gcloud", global = true)]
-    authenticated: bool,
 }
 #[derive(Subcommand, Clone)]
 enum Commands {
@@ -183,23 +178,17 @@ fn run(mut cli: Cli) -> Result<()> {
                 ca_cert: cli.ca_cert,
             },
         )?,
-        None => {
-            if let Some(file) = cli.file.clone() {
-                start_download(&cli, &api, &db, file, connections)?;
-            } else {
-                tui::run(
-                    api,
-                    tui::Options {
-                        folder: "root".into(),
-                        output: cli.output.unwrap_or_else(|| "downloads".into()),
-                        ip: cli.ip,
-                        sni: cli.sni,
-                        connections,
-                        ca_cert: cli.ca_cert,
-                    },
-                )?;
-            }
-        }
+        None => tui::run(
+            api,
+            tui::Options {
+                folder: "root".into(),
+                output: cli.output.unwrap_or_else(|| "downloads".into()),
+                ip: cli.ip,
+                sni: cli.sni,
+                connections,
+                ca_cert: cli.ca_cert,
+            },
+        )?,
     }
     Ok(())
 }
@@ -210,10 +199,7 @@ fn start_download(
     file: String,
     connections: u8,
 ) -> Result<()> {
-    let token = if cli.authenticated
-        || db.account()?.is_some()
-        || std::env::var_os("GDIRECT_ACCESS_TOKEN").is_some()
-    {
+    let token = if db.account()?.is_some() || std::env::var_os("GDIRECT_ACCESS_TOKEN").is_some() {
         Some(api.download_token()?)
     } else {
         None
@@ -276,8 +262,8 @@ mod tests {
         assert_eq!(cli.connections, Some(8));
         assert!(matches!(cli.command, Some(Commands::Browse { .. })));
         assert!(Cli::try_parse_from(["gdirect", "browse", "-j", "0"]).is_err());
-        let cli = Cli::try_parse_from(["gdirect", "file_id", "-o", "out.bin"]).unwrap();
-        assert_eq!(cli.file.as_deref(), Some("file_id"));
+        assert!(Cli::try_parse_from(["gdirect", "lgoin"]).is_err());
+        assert!(Cli::try_parse_from(["gdirect", "--auth", "ls"]).is_err());
         assert!(Cli::try_parse_from(["gdirect", "scan", "--list"]).is_ok());
     }
 }

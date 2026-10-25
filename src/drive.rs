@@ -51,7 +51,7 @@ impl FileRef {
     pub fn url(&self, authenticated: bool, export: Option<&str>) -> Result<Url> {
         ensure!(
             export.is_none() || authenticated,
-            "--export requires --gcloud or GDIRECT_ACCESS_TOKEN"
+            "--export requires gdirect login or GDIRECT_ACCESS_TOKEN"
         );
         let mut url = if authenticated {
             Url::parse(&format!(
