@@ -1,0 +1,84 @@
+--- a/src/SocketCore.cc
++++ b/src/SocketCore.cc
+@@ -32,6 +32,8 @@
+  * files in the program, then also delete it here.
+  */
+ /* copyright --> */
++#include "gdirect_route.h"
++
+ #include "SocketCore.h"
+ 
+ #ifdef HAVE_IPHLPAPI_H
+@@ -65,6 +67,9 @@
+ #ifdef HAVE_LIBSSH2
+ #  include "SSHSession.h"
+ #endif // HAVE_LIBSSH2
++
++const char* gdirect_ip = nullptr;
++const char* gdirect_sni = nullptr;
+ 
+ namespace aria2 {
+ 
+@@ -936,7 +941,9 @@
+     // "localhost" will produce TLS alert with GNUTLS.
+     if (tlsctx->getSide() == TLS_CLIENT && !util::isNumericHost(hostname) &&
+         hostname.find(".") != std::string::npos) {
+-      rv = tlsSession_->setSNIHostname(hostname);
++      const char* sni = gdirect_host(hostname) ? gdirect_sni : nullptr;
++      rv = (sni && !*sni) ? TLS_ERR_OK :
++          tlsSession_->setSNIHostname(sni ? std::string(sni) : hostname);
+       if (rv != TLS_ERR_OK) {
+         throw DL_ABORT_EX(fmt(EX_SSL_INIT_FAILURE,
+                               tlsSession_->getLastErrorString().c_str()));
+@@ -1450,6 +1457,10 @@
+   hints.ai_flags = getDefaultAIFlags();
+   hints.ai_flags |= flags;
+   hints.ai_protocol = protocol;
++  if (host && gdirect_ip && *gdirect_ip && gdirect_host(host)) {
++    host = gdirect_ip;
++    hints.ai_flags |= AI_NUMERICHOST;
++  }
+   return getaddrinfo(host, service, &hints, resPtr);
+ }
+ 
+--- a/src/Request.cc
++++ b/src/Request.cc
+@@ -32,6 +32,8 @@
+  * files in the program, then also delete it here.
+  */
+ /* copyright --> */
++#include "gdirect_route.h"
++
+ #include "Request.h"
+ 
+ #include <cassert>
+@@ -150,7 +152,8 @@
+ {
+   currentUri_ = removeFragment(srcUri);
+   uri::UriStruct us;
+-  if (uri::parse(us, currentUri_)) {
++  if (uri::parse(us, currentUri_) &&
++      us.protocol == "https" && gdirect_host(us.host)) {
+     us_.swap(us);
+     return true;
+   }
+--- a/src/HttpRequest.cc
++++ b/src/HttpRequest.cc
+@@ -32,6 +32,8 @@
+  * files in the program, then also delete it here.
+  */
+ /* copyright --> */
++#include "gdirect_route.h"
++
+ #include "HttpRequest.h"
+ 
+ #include <cassert>
+@@ -279,6 +281,8 @@
+   }
+   // append additional headers given by user.
+   for (const auto& hd : headers_) {
++    if (util::istartsWith(hd, "Authorization:") &&
++        getHost() != "www.googleapis.com") continue;
+     requestLine += hd;
+     requestLine += "\r\n";
+   }
