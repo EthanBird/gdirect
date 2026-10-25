@@ -33,7 +33,7 @@
 - Drive API errors keep their HTTP status, and the re-login hint appears only for permission errors.
 - Folder listings keep Drive's natural name order (`file2` before `file10`).
 - Public downloads are only checked for Drive's HTML confirmation page when the saved file is actually HTML.
-- `unmount`, and a failed mount, delete the credentials file exported for rclone.
+- `unmount`, and a failed mount, delete the credentials file exported for rclone. A foreground mount stopped with Ctrl-C on macOS/Linux still leaves it until the next mount.
 - Shortcuts and Google Forms/Sites/Maps are no longer offered for PDF export in `browse`.
 - Download failures show one short message for the actual error.
 - Uploads use 32 MiB chunks, which is faster on high-latency links.
