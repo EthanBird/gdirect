@@ -94,12 +94,29 @@ pub fn run(
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(default_mount)?;
-    fs::create_dir_all(&path)?;
-    let path = path.canonicalize()?;
-    ensure!(
-        fs::read_dir(&path)?.next().is_none(),
-        "mount directory must be empty"
-    );
+    #[cfg(windows)]
+    let path = {
+        ensure!(
+            !path.exists(),
+            "Windows mount directory must not already exist"
+        );
+        let absolute = std::path::absolute(&path)?;
+        let parent = absolute
+            .parent()
+            .context("mount requires a directory path")?;
+        fs::create_dir_all(parent)?;
+        absolute
+    };
+    #[cfg(not(windows))]
+    let path = {
+        fs::create_dir_all(&path)?;
+        let path = path.canonicalize()?;
+        ensure!(
+            fs::read_dir(&path)?.next().is_none(),
+            "mount directory must be empty"
+        );
+        path
+    };
     let state = api
         .db
         .canonicalize()?
