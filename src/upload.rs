@@ -52,10 +52,16 @@ fn acknowledged(range: &str, size: u64) -> Result<u64> {
     Ok(next)
 }
 fn failure(response: Response) -> anyhow::Error {
-    // Do not include a response body: it can contain the secret session URI.
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    let msg = data["error"]["message"]
+        .as_str()
+        .unwrap_or("request failed");
     anyhow::anyhow!(
-        "Drive upload returned {}; rerun the same upload to resume",
-        response.status()
+        "Drive upload returned {} ({}); rerun the same upload to resume",
+        status,
+        msg
     )
 }
 impl Api {
@@ -85,7 +91,7 @@ impl Api {
         let mut session = saved.filter(|s| s.size == size && s.modified == modified);
         if let Some(s) = &session {
             let mut resumed = false;
-            for attempt in 0..12 {
+            for attempt in 0..30 {
                 let response = self
                     .client
                     .put(session_url(&s.url)?)
@@ -118,11 +124,16 @@ impl Api {
                         resumed = true;
                         break;
                     }
-                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 11 => {
-                        std::thread::sleep(Duration::from_secs(2));
+                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 4 => {
+                        std::thread::sleep(Duration::from_millis(1200));
                     }
-                    _ if response.status().is_server_error() && attempt < 11 => {
-                        std::thread::sleep(Duration::from_secs(2));
+                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS => {
+                        session = None;
+                        resumed = true;
+                        break;
+                    }
+                    _ if response.status().is_server_error() && attempt < 29 => {
+                        std::thread::sleep(Duration::from_millis(1200));
                     }
                     _ => return Err(failure(response)),
                 }
@@ -136,7 +147,7 @@ impl Api {
             None => {
                 let mut raw_loc = None;
                 let mut last_resp = None;
-                for attempt in 0..8 {
+                for attempt in 0..30 {
                     let response = self
                         .client
                         .post("https://www.googleapis.com/upload/drive/v3/files")
@@ -164,9 +175,9 @@ impl Api {
                     }
                     if (response.status() == StatusCode::FORBIDDEN
                         || response.status() == StatusCode::TOO_MANY_REQUESTS)
-                        && attempt < 7
+                        && attempt < 29
                     {
-                        std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                        std::thread::sleep(Duration::from_millis(1500));
                         continue;
                     }
                     last_resp = Some(response);
@@ -257,28 +268,14 @@ impl Api {
                         || r.status() == StatusCode::TOO_MANY_REQUESTS
                         || r.status() == StatusCode::FORBIDDEN =>
                 {
-                    if probe
-                        && let Ok(existing) = self.list(parent)
-                        && let Some(done) = existing.into_iter().find(|f| {
-                            !f.folder()
-                                && f.name == name
-                                && f.size.as_deref() == Some(&size.to_string())
-                        })
-                    {
-                        db.unset(&key)?;
-                        let _ = db.record_activity(
-                            "UPLOAD",
-                            "COMPLETED",
-                            name,
-                            Some(&done.id),
-                            Some(size),
-                            Some(&format!("parent={parent} (verified)")),
-                        );
-                        eprintln!("\rUploaded {size}/{size} bytes");
-                        return Ok(done);
-                    }
+                    // When the final chunk triggers a rate limit on metadata creation,
+                    // retry sending the final chunk directly instead of switching to probe
+                    // unless it was an intermediate chunk.
+                    let is_final_chunk = start + CHUNK >= size;
                     failures += 1;
-                    probe = true;
+                    if !is_final_chunk {
+                        probe = true;
+                    }
                 }
                 Err(_) => {
                     failures += 1;
@@ -286,11 +283,11 @@ impl Api {
                 }
                 Ok(r) => return Err(failure(r)),
             }
-            if failures >= 20 {
+            if failures >= 40 {
                 bail!("upload interrupted; rerun the same command to resume");
             }
             if failures > 0 {
-                std::thread::sleep(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_millis(1500));
             }
         }
     }

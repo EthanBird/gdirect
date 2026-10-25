@@ -318,17 +318,27 @@ impl Api {
         });
         for entry in entries {
             let child_path = entry.path();
-            for attempt in 0..3 {
+            for attempt in 0..15 {
                 match self.upload_tree(&child_path, &folder.id, None) {
                     Ok(()) => break,
-                    Err(e) if attempt < 2 => {
+                    Err(e) if attempt < 14 => {
                         eprintln!(
                             "warning: retrying {} ({e:#})",
                             child_path.display()
                         );
-                        std::thread::sleep(Duration::from_secs(3));
+                        std::thread::sleep(Duration::from_secs(5));
                     }
                     Err(e) => {
+                        if let Ok(db) = Store::open(&self.db) {
+                            let _ = db.record_activity(
+                                "UPLOAD",
+                                "FAILED",
+                                &child_path.display().to_string(),
+                                None,
+                                None,
+                                Some(&format!("{e:#}")),
+                            );
+                        }
                         eprintln!(
                             "error uploading {}: {e:#}",
                             child_path.display()
