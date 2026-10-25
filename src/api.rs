@@ -154,11 +154,6 @@ impl Api {
                 break;
             }
         }
-        files.sort_by(|a, b| {
-            b.folder()
-                .cmp(&a.folder())
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
         Store::open(&self.db)?.cache(folder, &serde_json::to_string(&files)?)?;
         Ok(files)
     }
