@@ -199,6 +199,9 @@ fn run(cli: Cli) -> Result<()> {
             let api = api::Api::new(db_path, None)?;
             let email = api.login(reauth, client_secret.as_deref(), credentials.as_deref())?;
             println!("Logged in: {email}\nSQLite: {}", api.db.display());
+            if !reauth && client_secret.is_none() && credentials.is_none() {
+                println!("To switch accounts: gdirect login --reauth");
+            }
         }
         Commands::Ls {
             folder,

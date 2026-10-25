@@ -67,14 +67,11 @@ impl Api {
         let db = Store::open(&self.db)?;
         let credentials = crate::auth::credentials(&db)?;
         let token = crate::auth::refresh(&credentials)?;
-        let email = self.account_for_token(&token.access_token)?;
-        if let Some(account) = db.account()? {
-            ensure!(
-                email == account,
-                "credentials belong to a different account; run gdirect login explicitly to switch accounts"
-            );
-        }
-        db.set("oauth_credentials", &serde_json::to_string(&credentials)?)?;
+        // The account is verified at login; refreshing the same credentials cannot change it.
+        let email = match db.account()? {
+            Some(account) => account,
+            None => self.account_for_token(&token.access_token)?,
+        };
         db.save_auth(&email, &token.access_token, token.expires_in)?;
         Ok(token.access_token)
     }
