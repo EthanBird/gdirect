@@ -4,6 +4,11 @@
 
 ## Installation
 
+```sh
+brew tap mizorewww/gdirect https://github.com/mizorewww/gdirect
+brew install mizorewww/gdirect/gdirect
+```
+
 Download your platform archive from [Releases](https://github.com/mizorewww/gdirect/releases/latest), extract it, and add its directory to `PATH`. Keep `cacert.pem` next to `gdirect` / `gdirect.exe`.
 
 Available builds: macOS 15+ (Apple Silicon / Intel), Linux x86_64 (glibc 2.35+), and Windows x86_64. Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) for Drive login.
@@ -64,3 +69,16 @@ gdirect download DOCUMENT_ID --export application/pdf -o document.pdf
 Repeat a download command to resume it. Completed files are not overwritten. If connectivity changes, run `gdirect scan` again. System TUN software must route these connections directly.
 
 Login state, verified IPs, cache, history and settings use `~/Library/Application Support/gdirect/state.sqlite3` on macOS or `~/.local/share/gdirect/state.sqlite3` on Linux. On Windows the location is `%LOCALAPPDATA%\gdirect\state.sqlite3`. Override with `--db PATH`. gcloud manages credential refresh; `GDIRECT_ACCESS_TOKEN` is also supported.
+
+
+```sh
+gdirect upload ./file.zip                        # Upload to Drive root
+gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
+brew install rclone                             # macOS
+gcloud auth login --enable-gdrive-access --update-adc
+gdirect mount                                   # ~/GoogleDrive
+gdirect mount ~/MyDrive --read-only
+gdirect unmount
+```
+
+Uploads use 8 MiB chunks and show byte progress. Repeat the same command after an interruption to resume. Uploads create new files without replacing existing names. Mounted files can be read and written in Finder; writes upload through a local cache with a 5 GiB cleanup target (open or pending files may exceed it). Wait for uploads before unmounting; the mount command prints the log path. Mounts use rclone and system routing, not scanned direct IPs. macOS uses built-in NFS without a FUSE driver; Linux needs FUSE3, and Windows needs WinFsp and runs in the foreground. Use `--foreground` for a foreground mount and Ctrl-C to stop it.
