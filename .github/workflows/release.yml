@@ -120,16 +120,23 @@ jobs:
       - shell: msys2 {0}
         run: test -f target/libaria2/lib/libaria2.a || ./scripts/build-libaria2.sh
       - shell: msys2 {0}
+        run: cargo fmt --check
+      - shell: msys2 {0}
+        run: cargo test --locked
+      - shell: msys2 {0}
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - shell: msys2 {0}
+        run: python tests/native_integration.py
+      - shell: msys2 {0}
+        run: cargo build --release --locked
+      - name: Check portable linkage
+        shell: msys2 {0}
         run: |
           set -euo pipefail
-          cargo fmt --check
-          cargo test --locked
-          cargo clippy --locked --all-targets -- -D warnings
-          python tests/native_integration.py
-          cargo build --release --locked
           objdump -p target/x86_64-pc-windows-gnu/release/gdirect.exe | grep 'DLL Name:' | tee /tmp/dependencies.txt
           if grep -Ei 'libgcc|libstdc|libwinpthread|libssl|libcrypto|msys-' /tmp/dependencies.txt; then exit 1; fi
-          python scripts/package-release.py --target x86_64-pc-windows-gnu
+      - shell: msys2 {0}
+        run: python scripts/package-release.py --target x86_64-pc-windows-gnu
       - name: Smoke test without MSYS2 on PATH
         shell: pwsh
         run: |
