@@ -54,12 +54,32 @@ impl Store {
             CREATE TABLE IF NOT EXISTS downloads(id INTEGER PRIMARY KEY,file_id TEXT NOT NULL,name TEXT NOT NULL,path TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL);")?;
         Ok(Self { conn })
     }
+    // verified_at is the last successful probe; failures keep it so stale IPs age out.
     pub fn endpoint(&self, ip: &str, latency: Option<i64>, error: Option<&str>) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO endpoints VALUES(?,?,?,?,?)",
-            params![ip, latency, now(), i32::from(latency.is_some()), error],
-        )?;
+        match latency {
+            Some(ms) => self.conn.execute(
+                "INSERT OR REPLACE INTO endpoints VALUES(?,?,?,1,NULL)",
+                params![ip, ms, now()],
+            )?,
+            None => self.conn.execute(
+                "INSERT INTO endpoints VALUES(?,NULL,0,0,?) ON CONFLICT(ip) DO UPDATE SET latency_ms=NULL,available=0,error=excluded.error",
+                params![ip, error],
+            )?,
+        };
         Ok(())
+    }
+    // Prunes endpoints without a success in 7 days and returns the best `limit` remaining.
+    pub fn rescan_candidates(&self, limit: usize) -> Result<Vec<String>> {
+        self.conn.execute(
+            "DELETE FROM endpoints WHERE verified_at<=?",
+            [now() - 7 * 86400],
+        )?;
+        let mut query = self.conn.prepare(
+            "SELECT ip FROM endpoints ORDER BY available DESC,latency_ms,verified_at DESC LIMIT ?",
+        )?;
+        Ok(query
+            .query_map([limit as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
     }
     pub fn best_ip(&self) -> Result<Option<std::net::IpAddr>> {
         let ip:Option<String>=self.conn.query_row("SELECT ip FROM endpoints WHERE available=1 AND verified_at>? ORDER BY latency_ms LIMIT 1",[now()-86400],|r|r.get(0)).optional()?;
@@ -167,6 +187,26 @@ mod tests {
             .execute("UPDATE endpoints SET verified_at=0", [])
             .unwrap();
         assert!(db.best_ip().unwrap().is_none());
+    }
+    #[test]
+    fn stale_endpoints_are_pruned() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE endpoints(ip TEXT PRIMARY KEY,latency_ms INTEGER,verified_at INTEGER NOT NULL,available INTEGER NOT NULL,error TEXT);").unwrap();
+        let db = Store { conn };
+        db.endpoint("1.0.0.1", Some(30), None).unwrap();
+        db.endpoint("1.0.0.2", Some(10), None).unwrap();
+        db.endpoint("1.0.0.3", Some(20), None).unwrap();
+        db.endpoint("1.0.0.3", None, Some("timeout")).unwrap();
+        db.endpoint("1.0.0.4", None, Some("never worked")).unwrap();
+        db.conn
+            .execute(
+                "UPDATE endpoints SET verified_at=? WHERE ip='1.0.0.1'",
+                [now() - 8 * 86400],
+            )
+            .unwrap();
+        assert_eq!(db.rescan_candidates(256).unwrap(), ["1.0.0.2", "1.0.0.3"]);
+        assert_eq!(db.rescan_candidates(1).unwrap(), ["1.0.0.2"]);
+        assert_eq!(db.endpoints().unwrap().len(), 2);
     }
     #[test]
     fn logout_keeps_endpoints() {

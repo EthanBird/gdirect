@@ -13,6 +13,7 @@ use std::{
 
 // A bootstrap candidate from Cealing-Host; always probed, never assumed reachable.
 const SEED: &str = "183.56.143.147";
+const LIMIT: usize = 256;
 fn public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -49,13 +50,6 @@ fn candidates(db: &Store, path: Option<&Path>) -> Result<Vec<IpAddr>> {
         }
     } else {
         ips.insert(SEED.parse()?);
-        for (ip, _, _) in db.endpoints()? {
-            if let Ok(ip) = ip.parse()
-                && public(ip)
-            {
-                ips.insert(ip);
-            }
-        }
         // DNS supplies candidates only. TLS and both Drive endpoints still have to pass.
         for host in [
             "www.googleapis.com",
@@ -66,9 +60,18 @@ fn candidates(db: &Store, path: Option<&Path>) -> Result<Vec<IpAddr>> {
                 ips.extend(addresses.map(|a| a.ip()).filter(|ip| public(*ip)));
             }
         }
+        for ip in db.rescan_candidates(LIMIT)? {
+            if ips.len() >= LIMIT {
+                break;
+            }
+            if let Ok(ip) = ip.parse()
+                && public(ip)
+            {
+                ips.insert(ip);
+            }
+        }
     }
     ensure!(!ips.is_empty(), "no candidate IPs");
-    ensure!(ips.len() <= 256, "at most 256 candidates per scan");
     Ok(ips.into_iter().collect())
 }
 fn probe(ip: IpAddr) -> Result<i64> {
