@@ -319,6 +319,10 @@ fn start_download(
             output,
             ip: Some(ip),
             sni: transfer.sni(),
+            md5: metadata
+                .as_ref()
+                .filter(|_| export.is_none())
+                .and_then(|meta| meta.md5_checksum.clone()),
             token,
             export,
             connections,

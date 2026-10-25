@@ -286,6 +286,7 @@ fn start(
         sni: options.sni.clone(),
         token: None,
         export: None,
+        md5: file.md5_checksum.clone(),
         connections,
         ca_cert: options.ca_cert.clone(),
     };

@@ -5,7 +5,7 @@ use std::{
     fs,
     io::Read,
     net::IpAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -23,6 +23,8 @@ pub struct Args {
     pub sni: Option<String>,
     pub token: Option<String>,
     pub export: Option<String>,
+    /// Drive's md5Checksum, when known, to verify the saved file.
+    pub md5: Option<String>,
     pub connections: u8,
     pub ca_cert: Option<PathBuf>,
 }
@@ -172,10 +174,16 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
     let mut url = file.url(token.is_some(), args.export.as_deref())?;
     // Never treat an unrelated existing file as a resumable download.
     let control = PathBuf::from(format!("{}.aria2", args.output.display()));
-    ensure!(
-        !args.output.exists() || control.exists(),
-        "output already exists without a .aria2 control file; choose another -o path"
-    );
+    if args.output.exists() && !control.exists() {
+        ensure!(
+            matches_md5(&args.output, args.md5.as_deref())?,
+            "output already exists; choose another -o path"
+        );
+        if progress.is_none() {
+            println!("Already downloaded {}", args.output.display());
+        }
+        return Ok(());
+    }
     if progress.is_none() {
         eprintln!(
             "libaria2 1.37.0 · IP={} · SNI={} · certificate verification ON",
@@ -217,6 +225,11 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
                 args.output.display()
             );
         }
+        ensure!(
+            args.md5.is_none() || matches_md5(&args.output, args.md5.as_deref())?,
+            "MD5 does not match Drive's checksum; the file is kept at {} for inspection",
+            args.output.display()
+        );
         if progress.is_none() {
             println!("Saved {}", args.output.display());
         }
@@ -225,7 +238,47 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
     unreachable!()
 }
 
+fn file_md5(path: &Path) -> Result<String> {
+    use md5::{Digest, Md5};
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Md5::new();
+    let mut buffer = vec![0; 1 << 20];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+fn matches_md5(path: &Path, expected: Option<&str>) -> Result<bool> {
+    let Some(expected) = expected else {
+        return Ok(false);
+    };
+    Ok(file_md5(path)?.eq_ignore_ascii_case(expected))
+}
+
 fn bundled_ca() -> Option<PathBuf> {
     let path = std::env::current_exe().ok()?.parent()?.join("cacert.pem");
     path.is_file().then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn md5_matches_drive_checksums() {
+        let path = std::env::temp_dir().join(format!("gdirect-md5-{}", std::process::id()));
+        fs::write(&path, b"abc").unwrap();
+        assert_eq!(file_md5(&path).unwrap(), "900150983cd24fb0d6963f7d28e17f72");
+        assert!(matches_md5(&path, Some("900150983CD24FB0D6963F7D28E17F72")).unwrap());
+        assert!(!matches_md5(&path, Some("d41d8cd98f00b204e9800998ecf8427e")).unwrap());
+        assert!(!matches_md5(&path, None).unwrap());
+        fs::remove_file(path).unwrap();
+    }
 }
