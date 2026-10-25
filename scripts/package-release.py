@@ -58,7 +58,7 @@ def main():
         output = subprocess.check_output([str(folder / binary), '--version'], text=True).strip()
         assert output == f'gdirect {version}', output
     digest = hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest()
-    (dist / f'{archive.name}.sha256').write_text(f'{digest}  {archive.name}\n')
+    (dist / f'{archive.name}.sha256').write_text(f'{digest}  {archive.name}\n', newline='\n')
     print(archive.name)
 
 

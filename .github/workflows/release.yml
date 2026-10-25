@@ -180,7 +180,7 @@ jobs:
               assert pathlib.Path(f'dist/gdirect-{version}-{target}.{ext}').is_file()
           PY
           cd dist
-          cat ./*.sha256 > SHA256SUMS
+          cat ./*.sha256 | tr -d '\r' > SHA256SUMS
           sha256sum -c SHA256SUMS
       - name: Include corresponding patched aria2 source
         env:
