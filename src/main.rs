@@ -186,7 +186,7 @@ fn run(cli: Cli) -> Result<()> {
             foreground,
             connections,
         } => {
-            let api = api::Api::new(db_path, Some(direct_ip(&db, None)?))?;
+            let api = api::Api::new(db_path, None)?;
             let connections = connections.unwrap_or_else(saved);
             mount::run(&api, path.as_deref(), read_only, foreground, connections)?;
         }
@@ -195,7 +195,7 @@ fn run(cli: Cli) -> Result<()> {
             client_secret,
             credentials,
         } => {
-            let api = api::Api::new(db_path, Some(direct_ip(&db, None)?))?;
+            let api = api::Api::new(db_path, None)?;
             let email = api.login(reauth, client_secret.as_deref(), credentials.as_deref())?;
             println!("Logged in: {email}\nSQLite: {}", api.db.display());
         }
