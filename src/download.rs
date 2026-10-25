@@ -204,26 +204,26 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
         fs::File::open(&args.output)?
             .take(1024 * 1024)
             .read_to_end(&mut prefix)?;
-        let text = String::from_utf8_lossy(&prefix);
         // Public downloads can return the virus-scan confirmation form with HTTP 200.
-        // Only follow an actual download form; legitimate HTML files stay untouched.
-        if token.is_none() && text.contains("download-form") {
-            let next = drive::confirmation(&text, &url)?;
-            ensure!(attempt < 2, "Drive confirmation loop");
-            fs::remove_file(&args.output)?;
-            url = next;
-            continue;
-        }
-        if token.is_none()
-            && text.contains("<html")
-            && (text.contains("accounts.google.com/ServiceLogin")
+        // Only Drive's own HTML pages are inspected; other files stay untouched.
+        if token.is_none() && html_page(&prefix) {
+            let text = String::from_utf8_lossy(&prefix);
+            if text.contains("download-form") {
+                let next = drive::confirmation(&text, &url)?;
+                ensure!(attempt < 2, "Drive confirmation loop");
+                fs::remove_file(&args.output)?;
+                url = next;
+                continue;
+            }
+            if text.contains("accounts.google.com/ServiceLogin")
                 || text.contains("Google Drive - Quota exceeded")
-                || text.contains("Google Drive - Access denied"))
-        {
-            bail!(
-                "Drive returned a login/quota error page; saved for inspection at {}",
-                args.output.display()
-            );
+                || text.contains("Google Drive - Access denied")
+            {
+                bail!(
+                    "Drive returned a login/quota error page; saved for inspection at {}",
+                    args.output.display()
+                );
+            }
         }
         ensure!(
             args.md5.is_none() || matches_md5(&args.output, args.md5.as_deref())?,
@@ -238,6 +238,15 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
     unreachable!()
 }
 
+fn html_page(prefix: &[u8]) -> bool {
+    let start = prefix.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(prefix);
+    let start = &start[start
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(start.len())..];
+    let head = String::from_utf8_lossy(&start[..start.len().min(16)]).to_ascii_lowercase();
+    head.starts_with("<!doctype html") || head.starts_with("<html")
+}
 fn file_md5(path: &Path) -> Result<String> {
     use md5::{Digest, Md5};
     let mut file = fs::File::open(path)?;
@@ -271,6 +280,16 @@ fn bundled_ca() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_html_pages_are_sniffed() {
+        assert!(html_page(
+            b"\n  <!DOCTYPE html><html><form id=\"download-form\">"
+        ));
+        assert!(html_page(b"\xEF\xBB\xBF<HTML lang=en>"));
+        assert!(!html_page(b"PK\x03\x04 download-form"));
+        assert!(!html_page(b"notes about <html> and download-form"));
+        assert!(!html_page(b""));
+    }
     #[test]
     fn md5_matches_drive_checksums() {
         let path = std::env::temp_dir().join(format!("gdirect-md5-{}", std::process::id()));
