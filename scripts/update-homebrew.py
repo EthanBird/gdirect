@@ -48,16 +48,17 @@ class Gdirect < Formula
     libexec.install "gdirect", "cacert.pem"
     bin.write_exec_script libexec/"gdirect"
     doc.install "README.md", "README.zh-CN.md", "BUILD-INFO.json"
+    doc.install "docs" if File.directory?("docs")
     (share/"licenses/gdirect").install Dir["*LICENSE*"]
   end
 
   def caveats
     <<~EOS
-      Drive login requires Google Cloud CLI:
-        gdirect login --reauth
-      Mounting additionally requires rclone:
+      First login needs a Google Desktop OAuth client JSON:
+        gdirect login --client-secret /path/to/client_secret.json
+      Setup guide: https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md
+      Mounting additionally requires rclone (plus FUSE3 on Linux):
         brew install rclone
-        gcloud auth login --enable-gdrive-access --update-adc
         gdirect mount
     EOS
   end

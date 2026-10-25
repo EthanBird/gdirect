@@ -4,81 +4,96 @@
 
 ## 安装
 
+**0.1.1 起已内置 Google 认证，不需要安装 gcloud CLI 或另外安装 Google SDK。** 首次使用仍需桌面 OAuth 客户端 JSON，安装后请按[独立配置指南](docs/configuration/README.zh-CN.md)授权。
+
+| 用途 | 运行依赖 |
+| --- | --- |
+| 浏览、上传、下载 | gdirect、Google 账号；首次授权需要浏览器 |
+| macOS 挂载 | rclone 1.75.2+；使用系统 NFS，无需 FUSE 驱动 |
+| Linux 挂载 | rclone 1.75.2+、FUSE3（`fusermount3`） |
+| Windows 挂载 | rclone 1.75.2+、WinFsp；前台运行 |
+
+预编译包支持 macOS 15+（Apple Silicon / Intel）、Linux x86_64（glibc 2.35+）、Windows x86_64。Alpine/musl、旧版 glibc、Linux ARM64 暂无兼容预编译包。
+
+Homebrew（macOS / Linux）：
+
 ```sh
-brew tap mizorewww/gdirect https://github.com/mizorewww/gdirect
-brew install mizorewww/gdirect/gdirect
+brew tap mizorewww/gdirect https://github.com/mizorewww/gdirect && brew install mizorewww/gdirect/gdirect rclone
 ```
 
-从 [Releases](https://github.com/mizorewww/gdirect/releases/latest) 下载对应平台的压缩包，完整解压后把目录加入 `PATH`。请保留 `cacert.pem` 与 `gdirect` / `gdirect.exe` 在同一目录。
+Linux 使用 Homebrew 时，挂载还需用发行版包管理器安装 FUSE3。升级命令：`brew update && brew upgrade gdirect`。
 
-支持 macOS 15+（Apple Silicon / Intel）、Linux x86_64（glibc 2.35+）和 Windows x86_64。云盘登录还需安装 [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)。
+下面的一键安装命令包含挂载依赖；只要 CLI 时去掉 `--with-mount` / `-WithMount`。Linux 系统包通过 sudo 安装；需要时从 rclone 官方下载并校验安装包。
 
-如需从源码构建，先安装 Rust、C++ 编译器、make、curl 和 OpenSSL，然后执行：
+```sh
+# macOS（无需预装 Homebrew）
+curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+
+# Debian 12+ / Ubuntu 22.04+
+sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+
+# Fedora / 使用 dnf 且 glibc >= 2.35 的发行版
+sudo dnf install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+
+# Arch / Manjaro
+sudo pacman -S --needed curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+
+# openSUSE（glibc >= 2.35）
+sudo zypper --non-interactive install curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+```
+
+Windows PowerShell（挂载依赖通过 [winget / 应用安装程序](https://learn.microsoft.com/windows/package-manager/winget/)安装）：
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.ps1'))) -WithMount
+```
+
+脚本安装到 Unix 的 `~/.local/bin` 或 Windows 的 `%LOCALAPPDATA%\gdirect\bin`，并打印 PATH 设置方法。Windows 会更新用户 PATH，请重新打开终端；WinFsp 安装可能出现管理员授权窗口。
+
+也可以下载 [Release 安装包](https://github.com/mizorewww/gdirect/releases/latest)，解压后将 `cacert.pem` 与可执行文件放在同一目录。源码编译需要 Rust 1.91+、C++ 编译器、make、curl、OpenSSL：
 
 ```sh
 git clone https://github.com/mizorewww/gdirect.git
 cd gdirect
-
-# macOS
-brew install openssl@3
-# Debian / Ubuntu
-# sudo apt-get install build-essential pkg-config libssl-dev ca-certificates curl xz-utils
-
+# macOS：brew install openssl@3
+# Debian / Ubuntu：sudo apt-get install build-essential pkg-config libssl-dev ca-certificates curl xz-utils
 ./scripts/build-libaria2.sh
 cargo install --path . --locked
 ```
 
 ## 使用
 
-```sh
-gdirect login --reauth       # 通过 gcloud 授权 Google Drive
-gdirect browse              # 浏览文件夹、下载文件
-```
-
-已有 Drive 权限的 gcloud 登录可直接运行 `gdirect login`，无需 `--reauth`。
-
-首次使用会自动扫描可用 Google IP 并保存到本机 SQLite，无需手动填写 IP。手动重新扫描或查看结果：
+**首次登录：** 先按[配置指南](docs/configuration/README.zh-CN.md)下载桌面 OAuth 客户端 JSON，然后执行：
 
 ```sh
-gdirect scan
-gdirect scan --list
+gdirect login --client-secret ~/Downloads/client_secret.json
+gdirect browse
 ```
 
-界面上方浏览目录、右侧预览，下方显示下载进度；默认使用 8 个下载连接。
+首次使用自动扫描可用 Google IP 并存入本机 SQLite。`gdirect scan` 重新扫描，`gdirect scan --list` 查看结果。下载默认 8 个连接。
 
-| 按键 | 操作 |
+| 按键 | 文件浏览器操作 |
 | --- | --- |
 | `j/k`、`↑/↓` | 选择 |
-| Enter、`l/→` | 打开文件夹 |
+| Enter、`l/→` | 进入文件夹 |
 | `h/←`、Backspace | 返回上级 |
-| `d` | 下载文件；Google 文档导出 PDF |
-| `+/-` | 调整后续任务连接数（1–16） |
+| `d` | 下载；Google 文档导出为 PDF |
+| `+/-` | 调整下载连接数（1–16） |
 | `r` | 刷新 |
-| `c` | 取消当前下载，保留断点 |
+| `c` | 取消并保留断点 |
 | `q` | 退出 |
 
 ```sh
 gdirect browse -o downloads -j 8
-gdirect browse FOLDER_ID
 gdirect ls root --json
 gdirect download FILE_ID -o downloads/file.zip
-gdirect download 'https://drive.google.com/file/d/FILE_ID/view' -o downloads/file.zip
-gdirect download DOCUMENT_ID --export application/pdf -o document.pdf
-```
-
-中断后执行相同下载命令即可续传，已有完整文件不会被覆盖。网络发生变化时运行 `gdirect scan` 重新检测。系统若启用了 TUN，需要将这些连接配置为直连。
-
-登录状态、可用 IP、目录缓存、下载记录和设置保存在本机 SQLite：macOS 为 `~/Library/Application Support/gdirect/state.sqlite3`，Linux 为 `~/.local/share/gdirect/state.sqlite3`。Windows 为 `%LOCALAPPDATA%\gdirect\state.sqlite3`。可用 `--db PATH` 修改位置。刷新凭据由 gcloud 管理，也支持 `GDIRECT_ACCESS_TOKEN` 环境变量。
-
-
-```sh
-gdirect upload ./file.zip                        # 上传到云盘根目录
+gdirect upload ./file.zip
 gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
-brew install rclone                             # macOS
-gcloud auth login --enable-gdrive-access --update-adc
-gdirect mount                                   # ~/GoogleDrive
+gdirect mount                    # ~/GoogleDrive；需要挂载依赖
 gdirect mount ~/MyDrive --read-only
-gdirect unmount
+gdirect unmount                  # Windows 前台挂载按 Ctrl-C 停止
 ```
 
-上传采用 8 MiB 分块，显示字节进度；中断后重复同一命令续传。上传会创建新文件，不覆盖云端同名文件。挂载后可直接在 Finder 中读写文件，写入经本地缓存上传，默认缓存清理目标为 5 GiB（正在使用或等待上传的文件可超出）。卸载前等待上传完成，可查看命令输出的日志路径。挂载使用 rclone 和系统网络路由，不使用扫描出的直连 IP。macOS 使用内置 NFS，无需 FUSE 驱动；Linux 需要 FUSE3，Windows 需要 WinFsp 并以前台运行。`--foreground` 可在前台挂载，Ctrl-C 停止。
+上传或下载中断后，重复同一命令续传。上传采用 8 MiB 分块并创建新文件，不覆盖云端同名文件。挂载写入通过本地缓存上传，缓存清理目标为 5 GiB（使用中或等待上传的文件可超出）；卸载前等待上传完成，日志路径由挂载命令打印。挂载走系统路由；CLI 直连传输需要系统 TUN 软件将选定 IP 路由为直连。
+
+凭据、IP 和设置保存在本机 SQLite：macOS 为 `~/Library/Application Support/gdirect/state.sqlite3`，Linux 为 `~/.local/share/gdirect/state.sqlite3`，Windows 为 `%LOCALAPPDATA%\gdirect\state.sqlite3`。可用 `--db PATH` 改路径，也支持 `GDIRECT_ACCESS_TOKEN`。

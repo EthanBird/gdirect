@@ -80,6 +80,9 @@ jobs:
             if grep -E 'lib(ssl|crypto)' /tmp/dependencies.txt; then exit 1; fi
           fi
       - run: python3 scripts/package-release.py --target ${{ matrix.target }}
+      - name: Test Unix installer and mount dependencies
+        if: hashFiles('scripts/install.sh') != ''
+        run: python3 tests/installer_integration.py --target ${{ matrix.target }} --with-mount
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
@@ -146,6 +149,20 @@ jobs:
           if grep -Ei 'libgcc|libstdc|libwinpthread|libssl|libcrypto|msys-' /tmp/dependencies.txt; then exit 1; fi
       - shell: msys2 {0}
         run: python scripts/package-release.py --target x86_64-pc-windows-gnu
+      - name: Test Windows installer
+        if: hashFiles('scripts/install.ps1') != ''
+        shell: pwsh
+        run: |
+          $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+          $name = "gdirect-$version-x86_64-pc-windows-gnu.zip"
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS", [IO.File]::ReadAllText("$PWD/dist/$name.sha256"))
+          ./scripts/install.ps1 -Version $version -ArtifactDir "$PWD/dist" -InstallDir "$env:RUNNER_TEMP/gdirect install test" -NoPath
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS", ('0' * 64) + "  $name`n")
+          $rejected = $false
+          try { ./scripts/install.ps1 -Version $version -ArtifactDir "$PWD/dist" -InstallDir "$env:RUNNER_TEMP/gdirect rejected" -NoPath }
+          catch { if ($_.ToString() -match 'checksum') { $rejected = $true } else { throw } }
+          if (-not $rejected) { throw 'Installer accepted an invalid checksum' }
+          Remove-Item dist/SHA256SUMS
       - name: Smoke test without MSYS2 on PATH
         shell: pwsh
         run: |

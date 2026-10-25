@@ -34,6 +34,8 @@ def main():
         shutil.copy2(executable, folder / binary)
         for document in ['README.md', 'README.zh-CN.md', 'LICENSE']:
             shutil.copy2(ROOT / document, folder / document)
+        if (ROOT / 'docs/configuration').is_dir():
+            shutil.copytree(ROOT / 'docs/configuration', folder / 'docs/configuration')
         for url, destination in [
             ('https://curl.se/ca/cacert.pem', 'cacert.pem'),
             ('https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.0/LICENSE.txt', 'OPENSSL-LICENSE.txt'),
@@ -48,8 +50,9 @@ def main():
         if windows:
             archive = dist / f'{name}.zip'
             with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
-                for file in sorted(folder.iterdir()):
-                    output.write(file, f'{name}/{file.name}')
+                for file in sorted(folder.rglob('*')):
+                    if file.is_file():
+                        output.write(file, f'{name}/{file.relative_to(folder).as_posix()}')
         else:
             archive = dist / f'{name}.tar.gz'
             with tarfile.open(archive, 'w:gz') as output:
