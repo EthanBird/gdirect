@@ -107,7 +107,7 @@ fn download(
     let sni = args
         .sni
         .as_ref()
-        .map(|s| CString::new(if s == "off" { "" } else { s }))
+        .map(|s| CString::new(s.as_str()))
         .transpose()?;
     let token = CString::new(token.unwrap_or_default())?;
     let ca_path = args.ca_cert.clone().or_else(bundled_ca);
@@ -156,9 +156,8 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
     let file = drive::FileRef::parse(&args.file)?;
     if let Some(sni) = &args.sni {
         ensure!(
-            sni == "off"
-                || (!sni.is_empty()
-                    && sni.len() <= 253
+            sni.is_empty()
+                || (sni.len() <= 253
                     && sni.split('.').all(|part| !part.is_empty()
                         && part.len() <= 63
                         && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))),
@@ -185,7 +184,11 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
             args.ip
                 .map(|ip| ip.to_string())
                 .unwrap_or_else(|| "system DNS".into()),
-            args.sni.as_deref().unwrap_or("original")
+            match args.sni.as_deref() {
+                None => "original",
+                Some("") => "none",
+                Some(sni) => sni,
+            }
         );
     }
     let mut progress = progress;

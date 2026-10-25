@@ -1,4 +1,4 @@
-use crate::allowed_url;
+use crate::download::allowed_url;
 use anyhow::{Context, Result, ensure};
 use scraper::{Html, Selector};
 use url::Url;
