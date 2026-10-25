@@ -197,15 +197,34 @@ fn validate_token(token: String) -> Result<String> {
 }
 fn checked(response: reqwest::blocking::Response) -> Result<serde_json::Value> {
     let status = response.status();
-    let data: serde_json::Value = response.json()?;
-    ensure!(
-        status.is_success(),
-        "Drive API {status}: {}. For insufficient scopes, run gdirect login --client-secret PATH",
-        data["error"]["message"]
-            .as_str()
-            .unwrap_or("request failed")
-    );
-    Ok(data)
+    let body = response.text().map_err(|e| e.without_url())?;
+    if status.is_success() {
+        return serde_json::from_str(&body).context("Drive API returned invalid JSON");
+    }
+    anyhow::bail!("{}", drive_error(status, &body))
+}
+fn drive_error(status: reqwest::StatusCode, body: &str) -> String {
+    let data: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let message = data["error"]["message"]
+        .as_str()
+        .unwrap_or("request failed");
+    // Missing scope or a disabled Drive API; per-file permission errors use other reasons.
+    let text = data.to_string();
+    if status == reqwest::StatusCode::FORBIDDEN
+        && [
+            "insufficientPermissions",
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+            "accessNotConfigured",
+            "SERVICE_DISABLED",
+        ]
+        .iter()
+        .any(|reason| text.contains(reason))
+    {
+        return format!(
+            "Drive API {status}: insufficient permission ({message}). Enable the Drive API in the OAuth client's project, then run gdirect login --reauth and allow Drive access"
+        );
+    }
+    format!("Drive API {status}: {message}")
 }
 pub fn safe_name(name: &str) -> String {
     let cleaned: String = name
@@ -231,6 +250,32 @@ pub fn destination(dir: &Path, file: &File) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drive_errors_keep_status_and_hint_only_for_scope() {
+        use reqwest::StatusCode;
+        assert_eq!(
+            drive_error(StatusCode::BAD_GATEWAY, "<html>bad gateway</html>"),
+            "Drive API 502 Bad Gateway: request failed"
+        );
+        assert_eq!(
+            drive_error(
+                StatusCode::NOT_FOUND,
+                r#"{"error":{"message":"File not found: x."}}"#
+            ),
+            "Drive API 404 Not Found: File not found: x."
+        );
+        let scope = drive_error(
+            StatusCode::FORBIDDEN,
+            r#"{"error":{"message":"Request had insufficient authentication scopes.","errors":[{"reason":"insufficientPermissions"}]}}"#,
+        );
+        assert!(scope.starts_with("Drive API 403 Forbidden: insufficient permission"));
+        assert!(scope.contains("gdirect login --reauth"));
+        let file = drive_error(
+            StatusCode::FORBIDDEN,
+            r#"{"error":{"message":"No access.","errors":[{"reason":"insufficientFilePermissions"}]}}"#,
+        );
+        assert_eq!(file, "Drive API 403 Forbidden: No access.");
+    }
     #[test]
     fn names_cannot_escape() {
         assert_eq!(safe_name("../a\n"), ".._a_");
