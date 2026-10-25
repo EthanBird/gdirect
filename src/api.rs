@@ -146,7 +146,7 @@ impl Api {
         let token = self.token()?;
         let url = format!("https://www.googleapis.com/drive/v3/{path}");
         let mut last_err = None;
-        for attempt in 0..8 {
+        for attempt in 0..30 {
             let mut response = self
                 .client
                 .get(&url)
@@ -167,9 +167,9 @@ impl Api {
             }
             match checked(response) {
                 Ok(val) => return Ok(val),
-                Err(e) if e.to_string().contains("Quota exceeded") && attempt < 7 => {
+                Err(e) if e.to_string().contains("Quota exceeded") && attempt < 29 => {
                     last_err = Some(e);
-                    std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                    std::thread::sleep(Duration::from_millis(2000));
                 }
                 Err(e) => return Err(e),
             }
@@ -224,6 +224,15 @@ impl Api {
     pub fn ensure_folder(&self, parent: &str, name: &str) -> Result<File> {
         ensure!(crate::drive::valid_id(parent), "invalid parent folder ID");
         ensure!(!name.trim().is_empty(), "folder name cannot be empty");
+        let existing = self
+            .cached(parent)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(Ok)
+            .unwrap_or_else(|| self.list(parent))?;
+        if let Some(found) = existing.into_iter().find(|f| f.folder() && f.name == name) {
+            return Ok(found);
+        }
         let existing = self.list(parent)?;
         if let Some(found) = existing.into_iter().find(|f| f.folder() && f.name == name) {
             return Ok(found);
@@ -279,7 +288,7 @@ impl Api {
             let file_name = name
                 .or_else(|| path.file_name().and_then(|s| s.to_str()))
                 .context("file name must be UTF-8")?;
-            let existing = self.list(parent)?;
+            let existing = self.cached(parent).unwrap_or_default();
             if let Some(done) = existing.into_iter().find(|f| {
                 !f.folder()
                     && f.name == file_name
@@ -299,6 +308,14 @@ impl Api {
                 return Ok(());
             }
             let uploaded = self.upload(path, parent, Some(file_name))?;
+            if let Ok(mut cached) = self.cached(parent) {
+                cached.push(uploaded.clone());
+                if let Ok(db) = Store::open(&self.db)
+                    && let Ok(json) = serde_json::to_string(&cached)
+                {
+                    let _ = db.cache(parent, &json);
+                }
+            }
             println!("FILE\t{}\t{}", uploaded.id, uploaded.name);
             return Ok(());
         }
@@ -307,6 +324,7 @@ impl Api {
             .or_else(|| path.file_name().and_then(|s| s.to_str()))
             .context("directory name must be UTF-8")?;
         let folder = self.ensure_folder(parent, dir_name)?;
+        let _ = self.list(&folder.id);
         println!("DIR\t{}\t{}", folder.id, folder.name);
         let mut entries: Vec<_> = std::fs::read_dir(path)?
             .collect::<std::io::Result<Vec<_>>>()?;

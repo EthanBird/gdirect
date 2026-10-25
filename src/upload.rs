@@ -127,8 +127,8 @@ impl Api {
                         resumed = true;
                         break;
                     }
-                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 4 => {
-                        std::thread::sleep(Duration::from_millis(1200));
+                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 25 => {
+                        std::thread::sleep(Duration::from_millis(2000));
                     }
                     StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS => {
                         session = None;
