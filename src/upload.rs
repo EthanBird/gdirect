@@ -12,7 +12,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-const CHUNK: u64 = 8 * 1024 * 1024;
+const CHUNK: u64 = 32 * 1024 * 1024;
 const FIELDS: &str = "id,name,mimeType,size,md5Checksum";
 #[derive(Serialize, Deserialize)]
 struct Session {
