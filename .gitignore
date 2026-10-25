@@ -1,0 +1,6 @@
+/target/
+/downloads/
+*.aria2
+.env
+.env.*
+/local/
