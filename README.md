@@ -4,7 +4,11 @@
 
 ## Installation
 
-Requires Rust, a C++ compiler, make, curl, OpenSSL and [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
+Download your platform archive from [Releases](https://github.com/mizorewww/gdirect/releases/latest), extract it, and add its directory to `PATH`. Keep `cacert.pem` next to `gdirect` / `gdirect.exe`.
+
+Available builds: macOS 15+ (Apple Silicon / Intel), Linux x86_64 (glibc 2.35+), and Windows x86_64. Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) for Drive login.
+
+To build from source, install Rust, a C++ compiler, make, curl and OpenSSL, then:
 
 ```sh
 git clone git@github.com:mizorewww/gdirect.git
@@ -59,4 +63,4 @@ gdirect download DOCUMENT_ID --export application/pdf -o document.pdf
 
 Repeat a download command to resume it. Completed files are not overwritten. If connectivity changes, run `gdirect scan` again. System TUN software must route these connections directly.
 
-Login state, verified IPs, cache, history and settings use `~/Library/Application Support/gdirect/state.sqlite3` on macOS or `~/.local/share/gdirect/state.sqlite3` on Linux. Override with `--db PATH`. gcloud manages credential refresh; `GDIRECT_ACCESS_TOKEN` is also supported.
+Login state, verified IPs, cache, history and settings use `~/Library/Application Support/gdirect/state.sqlite3` on macOS or `~/.local/share/gdirect/state.sqlite3` on Linux. On Windows the location is `%LOCALAPPDATA%\gdirect\state.sqlite3`. Override with `--db PATH`. gcloud manages credential refresh; `GDIRECT_ACCESS_TOKEN` is also supported.

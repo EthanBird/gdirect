@@ -1,0 +1,200 @@
+name: Release
+on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  unix:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      OPENSSL_STATIC: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install native dependencies
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            brew install openssl@3
+            echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          else
+            sudo apt-get update
+            sudo apt-get install -y libssl-dev pkg-config
+          fi
+      - uses: actions/cache@v4
+        id: native-cache
+        with:
+          path: target/libaria2
+          key: aria2-${{ matrix.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-libaria2.sh', 'vendor/**') }}
+      - if: steps.native-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-libaria2.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - run: cargo fmt --check
+      - run: cargo test --locked --target ${{ matrix.target }}
+      - run: cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+      - run: python3 tests/native_integration.py
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Check portable linkage
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            otool -L "target/$TARGET/release/gdirect" | tee /tmp/dependencies.txt
+            if grep -E 'lib(ssl|crypto)|/opt/homebrew|/usr/local/opt' /tmp/dependencies.txt; then exit 1; fi
+          else
+            ldd "target/$TARGET/release/gdirect" | tee /tmp/dependencies.txt
+            if grep -E 'lib(ssl|crypto)' /tmp/dependencies.txt; then exit 1; fi
+          fi
+      - run: python3 scripts/package-release.py --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Build x86_64-pc-windows-gnu
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      OPENSSL_STATIC: '1'
+      CARGO_BUILD_TARGET: x86_64-pc-windows-gnu
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: gcc
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+          components: rustfmt, clippy
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: >-
+            make patch tar xz diffutils
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-python
+      - name: Configure OpenSSL prefix
+        shell: msys2 {0}
+        run: echo "OPENSSL_PREFIX=$(cygpath -m /mingw64)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        id: native-cache
+        with:
+          path: target/libaria2
+          key: aria2-windows-gnu-${{ hashFiles('scripts/build-libaria2.sh', 'vendor/**') }}
+      - if: steps.native-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: ./scripts/build-libaria2.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows-gnu
+      - shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo test --locked
+          cargo clippy --locked --all-targets -- -D warnings
+          python tests/native_integration.py
+          cargo build --release --locked
+          objdump -p target/x86_64-pc-windows-gnu/release/gdirect.exe | grep 'DLL Name:' | tee /tmp/dependencies.txt
+          if grep -Ei 'libgcc|libstdc|libwinpthread|libssl|libcrypto|msys-' /tmp/dependencies.txt; then exit 1; fi
+          python scripts/package-release.py --target x86_64-pc-windows-gnu
+      - name: Smoke test without MSYS2 on PATH
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          & ./target/x86_64-pc-windows-gnu/release/gdirect.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone Windows binary failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-x86_64-pc-windows-gnu
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish complete release
+    needs: [unix, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Validate version, checksums and complete asset set
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
+          assert os.environ['TAG'] == f'v{version}', 'Tag must match Cargo.toml version'
+          targets = ['x86_64-unknown-linux-gnu', 'aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-pc-windows-gnu']
+          for target in targets:
+              ext = 'zip' if 'windows' in target else 'tar.gz'
+              assert pathlib.Path(f'dist/gdirect-{version}-{target}.{ext}').is_file()
+          PY
+          cd dist
+          cat ./*.sha256 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Include corresponding patched aria2 source
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p source/target/vendor
+          git archive HEAD | tar -x -C source
+          curl -fL --retry 3 https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz -o source/target/vendor/aria2-1.37.0.tar.xz
+          echo '60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b  source/target/vendor/aria2-1.37.0.tar.xz' | sha256sum -c -
+          tar -czf "dist/gdirect-${TAG#v}-source.tar.gz" -C source .
+          cd dist
+          sha256sum "gdirect-${TAG#v}-source.tar.gz" >> SHA256SUMS
+      - name: Create draft, upload all assets, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --title "gdirect $TAG" --generate-notes
+          fi
+          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber
+          gh release edit "$TAG" --draft=false --latest

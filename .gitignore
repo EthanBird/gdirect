@@ -11,3 +11,5 @@
 *.sqlite3-shm
 
 __pycache__/
+
+/dist/
