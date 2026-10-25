@@ -74,7 +74,8 @@ fn candidates(db: &Store, path: Option<&Path>) -> Result<Vec<IpAddr>> {
     ensure!(!ips.is_empty(), "no candidate IPs");
     Ok(ips.into_iter().collect())
 }
-fn probe(ip: IpAddr) -> Result<i64> {
+// A missing or changed public test file is reported as a warning, not as a dead IP.
+fn probe(ip: IpAddr) -> Result<(i64, Option<String>)> {
     let client = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -96,18 +97,19 @@ fn probe(ip: IpAddr) -> Result<i64> {
     let data: serde_json::Value = response.json()?;
     ensure!(data["error"]["code"] == 401, "invalid Drive API response");
     let response=client.get("https://drive.usercontent.google.com/download?id=0B9P1L--7Wd2vU3VUVlFnbTgtS2c&export=download&confirm=t").send().map_err(|e|e.without_url())?;
-    ensure!(
-        response.status().is_success(),
-        "Drive download probe HTTP {}",
-        response.status()
-    );
-    let mut bytes = Vec::new();
-    response.take(32).read_to_end(&mut bytes)?;
-    ensure!(
-        bytes == b"spam\n",
-        "Drive download probe returned unexpected content"
-    );
-    Ok(start.elapsed().as_millis() as i64)
+    let status = response.status();
+    let warning = if matches!(
+        status,
+        reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
+    ) {
+        Some(format!("HTTP {status}"))
+    } else {
+        ensure!(status.is_success(), "Drive download probe HTTP {status}");
+        let mut bytes = Vec::new();
+        response.take(32).read_to_end(&mut bytes)?;
+        (bytes != b"spam\n").then(|| "unexpected content".into())
+    };
+    Ok((start.elapsed().as_millis() as i64, warning))
 }
 pub fn run(db: &Store, path: Option<&Path>) -> Result<IpAddr> {
     let ips = candidates(db, path)?;
@@ -117,6 +119,7 @@ pub fn run(db: &Store, path: Option<&Path>) -> Result<IpAddr> {
     );
     let (tx, rx) = mpsc::channel();
     let candidates = Arc::new(Mutex::new(ips.into_iter()));
+    let mut warned = false;
     thread::scope(|scope| {
         for _ in 0..8 {
             let tx = tx.clone();
@@ -142,7 +145,15 @@ pub fn run(db: &Store, path: Option<&Path>) -> Result<IpAddr> {
     .into_iter()
     .try_for_each(|(ip, result)| -> Result<()> {
         match result {
-            Ok(ms) => {
+            Ok((ms, problem)) => {
+                if let Some(problem) = problem
+                    && !warned
+                {
+                    eprintln!(
+                        "warning: Drive test file probe failed ({problem}); IPs were verified with the Drive API probe only"
+                    );
+                    warned = true;
+                }
                 db.endpoint(&ip.to_string(), Some(ms), None)?;
                 eprintln!("  OK  {ip}  {ms} ms");
             }
