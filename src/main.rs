@@ -169,13 +169,11 @@ fn run(cli: Cli) -> Result<()> {
     });
     match command {
         Commands::Scan { list: true, .. } => {
-            for (ip, latency, available) in db.endpoints()? {
-                println!(
-                    "{}\t{}\t{}",
-                    ip,
-                    if available { "OK" } else { "unavailable" },
-                    latency.map(|v| format!("{v} ms")).unwrap_or_default()
-                );
+            for e in db.endpoints()? {
+                match e.latency_ms {
+                    Some(ms) => println!("{}\tOK\t{ms} ms", e.ip),
+                    None => println!("{}\tunavailable\t{}", e.ip, e.error.unwrap_or_default()),
+                }
             }
         }
         Commands::Scan { ips, .. } => {

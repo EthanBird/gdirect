@@ -16,6 +16,11 @@ pub fn default_path() -> Result<PathBuf> {
         .context("cannot locate local data directory")?
         .join("gdirect/state.sqlite3"))
 }
+pub struct Endpoint {
+    pub ip: String,
+    pub latency_ms: Option<i64>,
+    pub error: Option<String>,
+}
 pub struct Store {
     pub conn: Connection,
 }
@@ -85,12 +90,18 @@ impl Store {
         let ip:Option<String>=self.conn.query_row("SELECT ip FROM endpoints WHERE available=1 AND verified_at>? ORDER BY latency_ms LIMIT 1",[now()-86400],|r|r.get(0)).optional()?;
         ip.map(|s| s.parse().map_err(Into::into)).transpose()
     }
-    pub fn endpoints(&self) -> Result<Vec<(String, Option<i64>, bool)>> {
+    pub fn endpoints(&self) -> Result<Vec<Endpoint>> {
         let mut query = self.conn.prepare(
-            "SELECT ip,latency_ms,available FROM endpoints ORDER BY available DESC,latency_ms",
+            "SELECT ip,latency_ms,error FROM endpoints ORDER BY available DESC,latency_ms",
         )?;
         Ok(query
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .query_map([], |r| {
+                Ok(Endpoint {
+                    ip: r.get(0)?,
+                    latency_ms: r.get(1)?,
+                    error: r.get(2)?,
+                })
+            })?
             .collect::<rusqlite::Result<_>>()?)
     }
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
