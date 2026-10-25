@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Offline TLS/range integration tests against the actual patched libaria2."""
+import hashlib
+import http.server
+import os
+from pathlib import Path
+import signal
+import ssl
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = bytes(range(256)) * 32768
+requests = []
+snis = []
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        requests.append((self.path, self.headers.get('Range'), self.headers.get('Authorization')))
+        if self.path == '/redirect':
+            self.send_response(302)
+            self.send_header('Location', 'https://example.com/steal')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        if self.path == '/media':
+            self.send_response(302)
+            self.send_header('Location', f'https://drive.usercontent.google.com:{self.server.server_port}/blob')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        start, end = 0, len(DATA)-1
+        if self.headers.get('Range'):
+            left, right = self.headers['Range'].removeprefix('bytes=').split('-')
+            start, end = int(left), int(right) if right else end
+            end = min(end, len(DATA)-1)
+            self.send_response(206)
+            self.send_header('Content-Range', f'bytes {start}-{end}/{len(DATA)}')
+        else:
+            self.send_response(200)
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Length', str(end-start+1))
+        self.end_headers()
+        try:
+            for i in range(start, end+1, 65536):
+                self.wfile.write(DATA[i:min(i+65536,end+1)])
+                self.wfile.flush()
+                if self.path == '/slow':
+                    time.sleep(.025)
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+            pass
+
+def main():
+    with tempfile.TemporaryDirectory(prefix='gdirect-test-') as tmp:
+        tmp = Path(tmp)
+        ssl_prefix = os.environ.get('OPENSSL_PREFIX')
+        if sys.platform == 'darwin' and not ssl_prefix:
+            ssl_prefix = subprocess.check_output(['brew','--prefix','openssl@3'],text=True).strip()
+        harness = tmp/'main.cc'
+        harness.write_text('''extern "C" int gdirect_download(const char*,const char*,const char*,const char*,const char*,const char*,const char*,int) noexcept;
+int main(int n,char**v){return n==8 ? gdirect_download(v[1],v[2],v[3],"127.0.0.1",v[4],v[5],v[6],v[7][0]-'0') : 99;}
+''')
+        cmd = ['c++','-std=c++11',str(harness),str(ROOT/'native/bridge.cc'),'-I'+str(ROOT/'target/libaria2/include'),str(ROOT/'target/libaria2/lib/libaria2.a')]
+        if ssl_prefix:
+            cmd += ['-L'+ssl_prefix+'/lib']
+        if sys.platform == 'darwin':
+            cmd += ['-framework','Security']
+        cmd += ['-pthread','-lssl','-lcrypto','-o',str(tmp/'harness')]
+        subprocess.run(cmd,check=True)
+        subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=drive.usercontent.google.com','-addext','subjectAltName=DNS:drive.usercontent.google.com,DNS:www.googleapis.com','-keyout',str(tmp/'key.pem'),'-out',str(tmp/'cert.pem')],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        server = http.server.ThreadingHTTPServer(('127.0.0.1',0), Handler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(tmp/'cert.pem',tmp/'key.pem')
+        context.set_servername_callback(lambda sock,name,ctx:snis.append(name))
+        server.socket = context.wrap_socket(server.socket,server_side=True)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        def command(name,path='/blob',host='drive.usercontent.google.com',sni='g.cn',token='',ca=None):
+            return [str(tmp/'harness'),f'https://{host}:{server.server_port}{path}',str(tmp),name,sni,token,str(ca or tmp/'cert.pem'),'4']
+        def run(*args,success=True,**kwargs):
+            p=subprocess.run(command(*args,**kwargs),capture_output=True,text=True,timeout=30)
+            assert (p.returncode == 0) == success, (p.returncode,p.stdout,p.stderr)
+        def check(name):
+            assert hashlib.sha256((tmp/name).read_bytes()).digest()==hashlib.sha256(DATA).digest()
+        try:
+            run('split.bin'); check('split.bin')
+            assert 'g.cn' in snis and any(r[1] for r in requests)
+            print('PASS: pinned IP, alternate SNI, original certificate identity, parallel ranges and byte integrity')
+            run('no-sni.bin',sni='');check('no-sni.bin');assert None in snis
+            print('PASS: no-SNI with certificate verification')
+            run('mismatch.bin',host='drive.google.com',success=False)
+            print('PASS: rejects wrong original hostname despite successful TLS transport')
+            run('redirect.bin',path='/redirect',success=False)
+            print('PASS: rejects non-Google redirects')
+            requests.clear()
+            run('media.bin',path='/media',host='www.googleapis.com',token='fixture-token');check('media.bin')
+            assert any(p=='/media' and t=='Bearer fixture-token' for p,_,t in requests)
+            assert all(t is None for p,_,t in requests if p=='/blob')
+            print('PASS: OAuth token is stripped from media redirects')
+            p=subprocess.Popen(command('resume.bin',path='/slow'),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            time.sleep(.4);p.send_signal(signal.SIGINT);p.wait(timeout=15)
+            assert (tmp/'resume.bin.aria2').exists(), 'missing resume control file'
+            requests.clear()
+            run('resume.bin',path='/slow');check('resume.bin')
+            assert any(r[1] and r[1] != 'bytes=0-' for r in requests)
+            assert not (tmp/'resume.bin.aria2').exists()
+            print('PASS: interrupted download resumes with complete byte integrity')
+        finally:
+            server.shutdown();server.server_close()
+
+if __name__ == '__main__':
+    main()
