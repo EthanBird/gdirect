@@ -2,26 +2,26 @@
 class Gdirect < Formula
   desc "Browse, download, upload and mount Google Drive"
   homepage "https://github.com/mizorewww/gdirect"
-  version "0.1.0"
+  version "0.1.1"
   license "GPL-2.0-or-later"
 
   on_macos do
     depends_on macos: :sequoia
     on_arm do
-      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.0/gdirect-0.1.0-aarch64-apple-darwin.tar.gz"
-      sha256 "7601214b3dc995f91bd66b29978905f44864ed38fd65f1194cb74787c8cf2507"
+      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.1/gdirect-0.1.1-aarch64-apple-darwin.tar.gz"
+      sha256 "1f414f5742980bf2fa9727ae883654b10843d1c3bf1e43aeffc3e40f510d3657"
     end
     on_intel do
-      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.0/gdirect-0.1.0-x86_64-apple-darwin.tar.gz"
-      sha256 "6aa08f6edd09242f69d219dc23e0910496a8bbbcb47b8c8ebaeb4e66b56f154d"
+      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.1/gdirect-0.1.1-x86_64-apple-darwin.tar.gz"
+      sha256 "fc79c54fd44f5835654b967badbb47da63cc542737f9fddef163886875541a1f"
     end
   end
 
   on_linux do
     depends_on arch: :x86_64
     on_intel do
-      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.0/gdirect-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "d1ec1abb5695cedb081ac11b004ac79dc938833b089401dd65e32b3a9c98e65b"
+      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.1/gdirect-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "ff56d8f4c9dc0e86fea35ba3fa5b39553010c4ff03161958055aa9b6633f8e38"
     end
   end
 
@@ -29,16 +29,17 @@ class Gdirect < Formula
     libexec.install "gdirect", "cacert.pem"
     bin.write_exec_script libexec/"gdirect"
     doc.install "README.md", "README.zh-CN.md", "BUILD-INFO.json"
+    doc.install "docs" if File.directory?("docs")
     (share/"licenses/gdirect").install Dir["*LICENSE*"]
   end
 
   def caveats
     <<~EOS
-      Drive login requires Google Cloud CLI:
-        gdirect login --reauth
-      Mounting additionally requires rclone:
+      First login needs a Google Desktop OAuth client JSON:
+        gdirect login --client-secret /path/to/client_secret.json
+      Setup guide: https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md
+      Mounting additionally requires rclone (plus FUSE3 on Linux):
         brew install rclone
-        gcloud auth login --enable-gdrive-access --update-adc
         gdirect mount
     EOS
   end
