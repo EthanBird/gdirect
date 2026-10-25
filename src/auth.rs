@@ -9,7 +9,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
     time::{Duration, Instant},
 };
@@ -57,26 +57,9 @@ impl Credentials {
         }
     }
 }
-fn adc_path() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS") {
-        return Some(path.into());
-    }
-    if let Some(path) = std::env::var_os("CLOUDSDK_CONFIG") {
-        return Some(PathBuf::from(path).join("application_default_credentials.json"));
-    }
-    let base = if cfg!(windows) {
-        dirs::config_dir()?.join("gcloud")
-    } else {
-        dirs::home_dir()?.join(".config/gcloud")
-    };
-    Some(base.join("application_default_credentials.json"))
-}
 pub fn credentials(db: &Store) -> Result<Credentials> {
     if let Some(raw) = db.setting("oauth_credentials")? {
         return Credentials::parse(raw.as_bytes());
-    }
-    if let Some(path) = adc_path().filter(|p| p.is_file()) {
-        return Credentials::parse(&fs::read(path)?);
     }
     bail!(
         "first login requires a Desktop OAuth client JSON: gdirect login --client-secret PATH\nSetup: {CONFIG_GUIDE}"
