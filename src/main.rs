@@ -139,6 +139,15 @@ enum Commands {
         #[command(flatten)]
         route: Route,
     },
+    /// Show activity history log and in-progress upload sessions
+    History {
+        /// Number of recent activity entries to show
+        #[arg(short = 'n', long, default_value_t = 50)]
+        limit: usize,
+        /// Print JSON instead of formatted table
+        #[arg(long)]
+        json: bool,
+    },
     /// Download a file ID or sharing URL (repeat the command to resume)
     Download {
         /// Drive file ID or sharing URL
@@ -264,6 +273,39 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 let uploaded = api.upload(&file, &parent, name.as_deref())?;
                 println!("{}\t{}", uploaded.id, uploaded.name);
+            }
+        }
+        Commands::History { limit, json } => {
+            let items = db.activities(limit)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&items)?);
+            } else {
+                let active = db.active_uploads()?;
+                if !active.is_empty() {
+                    println!("=== In-Progress Resumable Upload Sessions ({}) ===", active.len());
+                    for (k, _) in &active {
+                        println!("  ACTIVE  {}", k.trim_start_matches("upload:"));
+                    }
+                    println!();
+                }
+                println!("ID\tUNIX_TIME\tACTION\tSTATUS\tSIZE_MB\tTARGET_ID\tNAME\tDETAIL");
+                for item in items.into_iter().rev() {
+                    let mb = item
+                        .size_bytes
+                        .map(|b| format!("{:.2} MB", b as f64 / (1024.0 * 1024.0)))
+                        .unwrap_or_else(|| "-".into());
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        item.id,
+                        item.created_at,
+                        item.action,
+                        item.status,
+                        mb,
+                        item.target_id.unwrap_or_else(|| "-".into()),
+                        item.name,
+                        item.detail.unwrap_or_default()
+                    );
+                }
             }
         }
         Commands::Download {

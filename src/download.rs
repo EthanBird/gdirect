@@ -542,6 +542,19 @@ pub fn run(args: Args, progress: Option<&mut Progress>) -> Result<()> {
         if progress.is_none() {
             println!("Saved {}", args.output.display());
         }
+        if let Ok(db_path) = crate::store::default_path()
+            && let Ok(db) = crate::store::Store::open(&db_path)
+        {
+            let size = fs::metadata(&args.output).ok().map(|m| m.len());
+            let _ = db.record_activity(
+                "DOWNLOAD",
+                "COMPLETED",
+                &args.output.display().to_string(),
+                Some(&file.id),
+                size,
+                None,
+            );
+        }
         return Ok(());
     }
     unreachable!()

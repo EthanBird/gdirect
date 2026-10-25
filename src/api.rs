@@ -250,7 +250,20 @@ impl Api {
                 .send()
                 .map_err(|e| e.without_url())?;
             match checked(response) {
-                Ok(data) => return Ok(serde_json::from_value(data)?),
+                Ok(data) => {
+                    let created: File = serde_json::from_value(data)?;
+                    if let Ok(db) = Store::open(&self.db) {
+                        let _ = db.record_activity(
+                            "MKDIR",
+                            "CREATED",
+                            name,
+                            Some(&created.id),
+                            None,
+                            Some(&format!("parent={parent}")),
+                        );
+                    }
+                    return Ok(created);
+                }
                 Err(e) if e.to_string().contains("Quota exceeded") && attempt < 7 => {
                     last_err = Some(e);
                     std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
@@ -272,6 +285,16 @@ impl Api {
                     && f.name == file_name
                     && f.size.as_deref() == Some(&meta.len().to_string())
             }) {
+                if let Ok(db) = Store::open(&self.db) {
+                    let _ = db.record_activity(
+                        "UPLOAD",
+                        "SKIPPED",
+                        file_name,
+                        Some(&done.id),
+                        Some(meta.len()),
+                        Some("already exists on Drive"),
+                    );
+                }
                 println!("SKIP\t{}\t{}", done.id, done.name);
                 return Ok(());
             }

@@ -30,6 +30,17 @@ pub struct Endpoint {
     pub latency_ms: Option<i64>,
     pub error: Option<String>,
 }
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ActivityRecord {
+    pub id: i64,
+    pub created_at: i64,
+    pub action: String,
+    pub status: String,
+    pub name: String,
+    pub target_id: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub detail: Option<String>,
+}
 pub struct Store {
     conn: Connection,
 }
@@ -65,6 +76,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS auth(id INTEGER PRIMARY KEY CHECK(id=1),account TEXT NOT NULL,token TEXT NOT NULL,expires_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,json TEXT NOT NULL,updated_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS activity_log(id INTEGER PRIMARY KEY AUTOINCREMENT,created_at INTEGER NOT NULL,action TEXT NOT NULL,status TEXT NOT NULL,name TEXT NOT NULL,target_id TEXT,size_bytes INTEGER,detail TEXT);
             DROP TABLE IF EXISTS downloads;")?;
         Ok(Self { conn })
     }
@@ -180,6 +192,73 @@ impl Store {
                 r.get(0)
             })
             .optional()?)
+    }
+    pub fn record_activity(
+        &self,
+        action: &str,
+        status: &str,
+        name: &str,
+        target_id: Option<&str>,
+        size_bytes: Option<u64>,
+        detail: Option<&str>,
+    ) -> Result<()> {
+        let ts = now();
+        let size_i64 = size_bytes.map(|v| v as i64);
+        let _ = self.conn.execute(
+            "INSERT INTO activity_log(created_at,action,status,name,target_id,size_bytes,detail) VALUES(?,?,?,?,?,?,?)",
+            params![ts, action, status, name, target_id, size_i64, detail],
+        );
+        let log_path = Path::new("E:\\gdirect\\activity.log");
+        if let Some(p) = log_path.parent()
+            && p.exists()
+            && let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)
+        {
+            use std::io::Write;
+            let _ = writeln!(
+                f,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                ts,
+                action,
+                status,
+                size_bytes
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "-".into()),
+                target_id.unwrap_or("-"),
+                name,
+                detail.unwrap_or("")
+            );
+        }
+        Ok(())
+    }
+    pub fn activities(&self, limit: usize) -> Result<Vec<ActivityRecord>> {
+        let mut query = self.conn.prepare(
+            "SELECT id,created_at,action,status,name,target_id,size_bytes,detail FROM activity_log ORDER BY id DESC LIMIT ?",
+        )?;
+        Ok(query
+            .query_map([limit as i64], |r| {
+                Ok(ActivityRecord {
+                    id: r.get(0)?,
+                    created_at: r.get(1)?,
+                    action: r.get(2)?,
+                    status: r.get(3)?,
+                    name: r.get(4)?,
+                    target_id: r.get(5)?,
+                    size_bytes: r.get(6)?,
+                    detail: r.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn active_uploads(&self) -> Result<Vec<(String, String)>> {
+        let mut query = self
+            .conn
+            .prepare("SELECT key,value FROM settings WHERE key LIKE 'upload:%'")?;
+        Ok(query
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 }
 

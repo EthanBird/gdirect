@@ -96,8 +96,16 @@ impl Api {
                     .map_err(|e| e.without_url())?;
                 match response.status() {
                     StatusCode::OK | StatusCode::CREATED => {
-                        let result = response.json()?;
+                        let result: File = response.json()?;
                         db.unset(&key)?;
+                        let _ = db.record_activity(
+                            "UPLOAD",
+                            "COMPLETED",
+                            name,
+                            Some(&result.id),
+                            Some(size),
+                            Some(&format!("parent={parent} (resumed)")),
+                        );
                         return Ok(result);
                     }
                     StatusCode::PERMANENT_REDIRECT => {
@@ -217,6 +225,14 @@ impl Api {
                         "uploaded size mismatch"
                     );
                     db.unset(&key)?;
+                    let _ = db.record_activity(
+                        "UPLOAD",
+                        "COMPLETED",
+                        name,
+                        Some(&result.id),
+                        Some(size),
+                        Some(&format!("parent={parent}")),
+                    );
                     eprintln!("\rUploaded {size}/{size} bytes");
                     return Ok(result);
                 }
