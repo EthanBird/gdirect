@@ -66,8 +66,9 @@ try {
     & (Join-Path $InstallDir 'gdirect.exe') --version
     if ($LASTEXITCODE -ne 0) { throw 'Installed executable failed its smoke test.' }
     Write-Host "Installed in $InstallDir. Open a new terminal to refresh PATH."
-    Write-Host 'First login: gdirect login --client-secret C:\path\to\client_secret.json'
-    Write-Host 'Setup: https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md'
+    Write-Host 'Next: create a Google OAuth client (one time), then sign in:'
+    Write-Host '  https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md'
+    Write-Host '  gdirect login --client-secret C:\path\to\client_secret.json'
 } finally {
     Remove-Item $TempDir -Recurse -Force
 }

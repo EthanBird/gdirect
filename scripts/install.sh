@@ -100,4 +100,4 @@ printf '\nInstalled in %s/bin\n' "$prefix"
 # The printed command intentionally keeps $PATH literal.
 # shellcheck disable=SC2016
 case ":$PATH:" in *":$prefix/bin:"*) ;; *) printf 'Add this to your shell configuration: export PATH=%q:"$PATH"\n' "$prefix/bin" ;; esac
-printf '\nFirst login (no gcloud required):\n  gdirect login --client-secret /path/to/client_secret.json\nSetup: https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md\n'
+printf '\nNext: create a Google OAuth client (one time), then sign in:\n  https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md\n  gdirect login --client-secret /path/to/client_secret.json\n'

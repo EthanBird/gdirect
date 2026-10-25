@@ -54,12 +54,11 @@ class Gdirect < Formula
 
   def caveats
     <<~EOS
-      First login needs a Google Desktop OAuth client JSON:
+      Next: create a Google OAuth client (one time), then sign in:
+        https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md
         gdirect login --client-secret /path/to/client_secret.json
-      Setup guide: https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md
-      Mounting additionally requires rclone (plus FUSE3 on Linux):
+      Mounting also needs rclone (and your distro's fuse3 package on Linux):
         brew install rclone
-        gdirect mount
     EOS
   end
 
