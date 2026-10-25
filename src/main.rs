@@ -4,13 +4,14 @@ mod drive;
 mod scan;
 mod store;
 mod tui;
+mod upload;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use download::allowed_url;
 use std::{net::IpAddr, path::PathBuf};
 
 #[derive(Parser)]
-#[command(version, about = "Browse and download Google Drive with libaria2")]
+#[command(version, about = "Browse, download and upload Google Drive files")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -62,6 +63,14 @@ enum Commands {
         folder: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Upload a local file (repeat the command to resume)
+    Upload {
+        file: PathBuf,
+        #[arg(long, default_value = "root")]
+        parent: String,
+        #[arg(long)]
+        name: Option<String>,
     },
     /// Download a file ID or sharing URL
     Download { file: String },
@@ -125,6 +134,10 @@ fn run(mut cli: Cli) -> Result<()> {
                     );
                 }
             }
+        }
+        Some(Commands::Upload { file, parent, name }) => {
+            let uploaded = api.upload(&file, &parent, name.as_deref())?;
+            println!("{}\t{}", uploaded.id, uploaded.name);
         }
         Some(Commands::Download { file }) => start_download(&cli, &api, &db, file, connections)?,
         Some(Commands::Browse { folder }) => tui::run(

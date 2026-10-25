@@ -30,7 +30,7 @@ impl File {
 }
 #[derive(Clone)]
 pub struct Api {
-    client: Client,
+    pub(crate) client: Client,
     pub db: PathBuf,
 }
 impl Api {
