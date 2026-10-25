@@ -313,12 +313,7 @@ fn start_download(
                 .map(|meta| api::destination(std::path::Path::new("downloads"), meta))
         })
         .context("public download requires -o FILE")?;
-    let name = metadata
-        .as_ref()
-        .map(|meta| meta.name.as_str())
-        .unwrap_or(&id);
-    let job = db.start_download(&id, name, &output)?;
-    let result = download::run(
+    download::run(
         download::Args {
             file,
             output,
@@ -330,9 +325,7 @@ fn start_download(
             ca_cert: transfer.ca_cert.clone(),
         },
         None,
-    );
-    db.finish_download(job, if result.is_ok() { "complete" } else { "failed" })?;
-    result
+    )
 }
 fn main() {
     if let Err(e) = run(Cli::parse()) {

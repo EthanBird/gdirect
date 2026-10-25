@@ -101,8 +101,7 @@ impl Api {
             match response.status() {
                 StatusCode::OK | StatusCode::CREATED => {
                     let result = response.json()?;
-                    db.conn
-                        .execute("DELETE FROM settings WHERE key=?", [&key])?;
+                    db.unset(&key)?;
                     return Ok(result);
                 }
                 StatusCode::PERMANENT_REDIRECT => start = offset(&response, size)?,
@@ -184,8 +183,7 @@ impl Api {
                         result.size.as_deref() == Some(&size.to_string()),
                         "uploaded size mismatch"
                     );
-                    db.conn
-                        .execute("DELETE FROM settings WHERE key=?", [&key])?;
+                    db.unset(&key)?;
                     eprintln!("\rUploaded {size}/{size} bytes");
                     return Ok(result);
                 }

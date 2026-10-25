@@ -22,7 +22,7 @@ pub struct Endpoint {
     pub error: Option<String>,
 }
 pub struct Store {
-    pub conn: Connection,
+    conn: Connection,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -56,7 +56,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS auth(id INTEGER PRIMARY KEY CHECK(id=1),account TEXT NOT NULL,token TEXT NOT NULL,expires_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS folders(id TEXT PRIMARY KEY,json TEXT NOT NULL,updated_at INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS downloads(id INTEGER PRIMARY KEY,file_id TEXT NOT NULL,name TEXT NOT NULL,path TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL);")?;
+            DROP TABLE IF EXISTS downloads;")?;
         Ok(Self { conn })
     }
     // verified_at is the last successful probe; failures keep it so stale IPs age out.
@@ -119,6 +119,11 @@ impl Store {
         )?;
         Ok(())
     }
+    pub fn unset(&self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM settings WHERE key=?", [key])?;
+        Ok(())
+    }
     pub fn token(&self) -> Result<Option<String>> {
         Ok(self
             .conn
@@ -166,17 +171,6 @@ impl Store {
                 r.get(0)
             })
             .optional()?)
-    }
-    pub fn start_download(&self, id: &str, name: &str, path: &Path) -> Result<i64> {
-        self.conn.execute("INSERT INTO downloads(file_id,name,path,status,created_at) VALUES(?,?,?,'downloading',?)", params![id,name,path.to_string_lossy(),now()])?;
-        Ok(self.conn.last_insert_rowid())
-    }
-    pub fn finish_download(&self, id: i64, status: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE downloads SET status=? WHERE id=?",
-            params![status, id],
-        )?;
-        Ok(())
     }
 }
 

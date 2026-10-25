@@ -198,8 +198,7 @@ pub fn run(
     db.set("mount", &serde_json::to_string(&mounted)?)?;
     for _ in 0..60 {
         if let Some(status) = child.try_wait()? {
-            db.conn
-                .execute("DELETE FROM settings WHERE key='mount'", [])?;
+            db.unset("mount")?;
             anyhow::bail!("rclone mount exited ({status}); see {}", log.display());
         }
         if is_mounted(&mounted.path)? {
@@ -212,8 +211,7 @@ pub fn run(
     child.wait()?;
     // Keep the record if the OS mounted at the timeout boundary.
     if !is_mounted(&mounted.path)? {
-        db.conn
-            .execute("DELETE FROM settings WHERE key='mount'", [])?;
+        db.unset("mount")?;
     }
     anyhow::bail!(
         "mount did not become ready within 30s; see {}",
@@ -268,8 +266,7 @@ pub fn unmount(db: &Store) -> Result<()> {
             ensure!(status.success(), "could not stop mount process");
         }
     }
-    db.conn
-        .execute("DELETE FROM settings WHERE key='mount'", [])?;
+    db.unset("mount")?;
     println!(
         "Unmounted {}. Cached writes are retained for the next mount.",
         mounted.path.display()

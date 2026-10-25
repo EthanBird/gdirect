@@ -300,8 +300,6 @@ fn start(
             if worker_cancel.load(Ordering::Relaxed) {
                 anyhow::bail!("Cancelled");
             }
-            let db = Store::open(&api.db)?;
-            let job = db.start_download(&file.id, &file.name, &args.output)?;
             let result = download::run(
                 args,
                 Some(&mut download::Progress {
@@ -309,18 +307,7 @@ fn start(
                     cancel: worker_cancel.clone(),
                 }),
             );
-            let cancelled = worker_cancel.load(Ordering::Relaxed);
-            db.finish_download(
-                job,
-                if cancelled {
-                    "cancelled"
-                } else if result.is_ok() {
-                    "complete"
-                } else {
-                    "failed"
-                },
-            )?;
-            if cancelled {
+            if worker_cancel.load(Ordering::Relaxed) {
                 anyhow::bail!("Cancelled; partial download saved");
             }
             result
@@ -350,6 +337,7 @@ pub fn run(api: Api, options: Options) -> Result<()> {
 }
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, api: Api, options: Options) -> Result<()> {
     let (tx, rx) = mpsc::channel();
+    let db = Store::open(&api.db)?;
     let initial = api.cached(&options.folder)?;
     let folder_name = if options.folder == "root" {
         "My Drive".to_owned()
@@ -477,11 +465,11 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, api: Api, options: Option
                 }
                 KeyCode::Char('+') | KeyCode::Char('=') => {
                     view.connections = (view.connections + 1).min(16);
-                    Store::open(&api.db)?.set("connections", &view.connections.to_string())?;
+                    db.set("connections", &view.connections.to_string())?;
                 }
                 KeyCode::Char('-') => {
                     view.connections = view.connections.saturating_sub(1).max(1);
-                    Store::open(&api.db)?.set("connections", &view.connections.to_string())?;
+                    db.set("connections", &view.connections.to_string())?;
                 }
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                     if let Some(file) = view.selected().filter(|f| f.folder()).cloned() {
