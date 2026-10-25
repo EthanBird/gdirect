@@ -1,56 +1,140 @@
 # gdirect
 
-[中文](README.zh-CN.md)
+[中文](README.zh-CN.md) · [Changelog](CHANGELOG.md)
 
-## Installation
+gdirect browses, downloads, uploads and mounts your Google Drive from the terminal. It finds Google IPs that are reachable from your network and sends Drive traffic straight to them, with multi-connection, resumable downloads.
 
-**Version 0.1.1+ includes Google authentication. No gcloud CLI or separate Google SDK installation is required.** First-time users still need a Desktop OAuth client JSON: follow the [Google configuration guide](docs/configuration/README.md) after installation.
+## How it works
 
-| Use | Runtime dependencies |
+| Traffic | Route |
 | --- | --- |
-| Browse, upload, download | gdirect and a Google account; a browser for initial authorization |
-| Mount on macOS | rclone 1.75.2+; built-in NFS, no FUSE driver |
-| Mount on Linux | rclone 1.75.2+, FUSE3 (`fusermount3`) |
-| Mount on Windows | rclone 1.75.2+, WinFsp; foreground mode |
+| Drive API, downloads, uploads (`browse`, `ls`, `download`, `upload`) | A scanned Google IP. The hostname and certificate check stay the same; the TLS SNI can be changed with `--sni` / `--no-sni` |
+| Sign-in and token refresh (`oauth2.googleapis.com`) | Your normal system network (DNS, proxy) |
+| `mount` (rclone) | Your normal system network |
 
-Prebuilt binaries: macOS 15+ (Apple Silicon / Intel), Linux x86_64 with glibc 2.35+, Windows x86_64. Alpine/musl, older glibc and Linux ARM64 do not have a compatible prebuilt package.
+The first transfer command scans candidate IPs automatically and keeps the fastest working one for 24 hours. `login` and `mount` do not scan.
+
+Network requirements:
+
+- Sign-in and token refresh must reach `oauth2.googleapis.com` through your system network. If Google is blocked, you still need a proxy or VPN for this.
+- If you use a TUN-mode proxy or VPN (for example Clash/Mihomo TUN), route the scanned Google IPs **DIRECT** and turn off fake-ip for them. Otherwise gdirect's traffic is captured again and the scan finds nothing. `gdirect scan --list` shows the IPs.
+
+## Install
+
+Prebuilt for macOS 15+ (Apple Silicon / Intel), Linux x86_64 with glibc 2.35+ (Ubuntu 22.04+, Debian 12+, recent Fedora/Arch/openSUSE), and Windows x86_64. Alpine/musl, older glibc and Linux ARM64 need a [source build](#build-from-source).
+
+macOS / Linux (requires `curl`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.ps1')))
+```
+
+The installer puts gdirect in `~/.local/bin` (Windows: `%LOCALAPPDATA%\gdirect\bin`) and tells you how to add it to PATH. On Windows, open a new terminal after installing.
+
+To use `mount`, add `--with-mount` (PowerShell: `-WithMount`). This also installs rclone 1.75.2+ and, on Linux, FUSE3 through your package manager (uses sudo). On Windows it installs rclone and WinFsp with winget; WinFsp may ask for administrator approval.
 
 Homebrew (macOS / Linux):
 
 ```sh
-brew tap mizorewww/gdirect https://github.com/mizorewww/gdirect && brew install mizorewww/gdirect/gdirect rclone
+brew tap mizorewww/gdirect https://github.com/mizorewww/gdirect
+brew install mizorewww/gdirect/gdirect
+brew install rclone   # only for mount; Linux also needs your distro's fuse3 package
 ```
 
-Linux Homebrew users also need their distro's FUSE3 package for mounting. To upgrade: `brew update && brew upgrade gdirect`.
+Upgrade with `brew update && brew upgrade gdirect`, or by rerunning the installer.
 
-One-command installers below include optional mount dependencies. Omit `--with-mount` / `-WithMount` for only the CLI. Linux system packages use sudo; rclone is installed from its verified upstream archive when needed.
+You can also download a [release archive](https://github.com/mizorewww/gdirect/releases/latest). Keep `cacert.pem` next to the executable, because downloads use it to verify certificates.
+
+## One-time Google setup (about 10 minutes)
+
+gdirect does not ship a shared Google client, so you create your own in a Google Cloud project, once. Follow the [Google setup guide](docs/configuration/README.md) to download a **Desktop app** OAuth client JSON, then:
 
 ```sh
-# macOS (does not require Homebrew)
-curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
-
-# Debian 12+ / Ubuntu 22.04+
-sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
-
-# Fedora / dnf distros with glibc >= 2.35
-sudo dnf install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
-
-# Arch / Manjaro
-sudo pacman -S --needed --noconfirm curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
-
-# openSUSE with glibc >= 2.35
-sudo zypper --non-interactive install curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.sh | bash -s -- --with-mount
+gdirect login --client-secret ~/Downloads/client_secret.json
 ```
 
-Windows PowerShell (mount dependency installation uses [winget / App Installer](https://learn.microsoft.com/windows/package-manager/winget/)):
+A browser opens. After you approve, the terminal prints `Logged in`. The JSON file is not needed again.
 
-```powershell
-& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/mizorewww/gdirect/main/scripts/install.ps1'))) -WithMount
+## Daily use
+
+```sh
+gdirect                                   # same as gdirect browse
+gdirect browse -o ~/Downloads             # download directory (default: ./downloads)
+gdirect ls root --json
+gdirect download FILE_ID_OR_URL           # saves to ./downloads/<name>
+gdirect download FILE_ID -o file.zip
+gdirect download DOC_ID --export application/pdf -o doc.pdf
+gdirect upload ./file.zip
+gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
 ```
 
-The script installs to `~/.local/bin` on Unix or `%LOCALAPPDATA%\gdirect\bin` on Windows and prints PATH instructions. Windows updates the user PATH; open a new terminal. WinFsp installation may request administrator approval.
+| Key in `browse` | Action |
+| --- | --- |
+| `j/k`, `↑/↓` | Select |
+| Enter, `l/→` | Open folder |
+| `h/←`, Backspace | Parent folder |
+| `d` | Queue download. Google Docs/Sheets/Slides are exported as PDF |
+| `+/-` | Connections for the next download (1–16), saved as your default |
+| `r` | Refresh |
+| `c` | Cancel the current download and keep the partial data |
+| `q` | Quit |
 
-Alternatively, download a [release](https://github.com/mizorewww/gdirect/releases/latest), extract it, and keep `cacert.pem` beside the executable. Source builds require Rust 1.91+, a C++ compiler, make, curl and OpenSSL:
+- **Resume:** if a download or upload is interrupted, run the same command again.
+- **Downloads** that already finished are recognised by their checksum and reported as already downloaded. Files are checked against Drive's MD5 after the download.
+- **Uploads** always create a new file. They never overwrite a file with the same name.
+- **Connections:** `-j N` sets the number of connections for one command only. The saved default (8 at first) changes only with `+/-` in `browse`.
+
+Advanced transfer options for `download` and `browse` (`ls` and `upload` accept `--ip` only):
+
+| Option | Meaning |
+| --- | --- |
+| `--ip IP` | Use this Google IP instead of the scanned one |
+| `--sni HOST` / `--no-sni` | Send a different TLS SNI, or none. Certificates are still checked against the real hostname |
+| `--ca-cert FILE` | Use this CA bundle instead of the bundled `cacert.pem` |
+| `--export MIME` | (`download`) Export a Google Docs file, for example `application/pdf` |
+
+Run `gdirect scan` to scan again and `gdirect scan --list` to see the results, including the last error for each IP. To test your own candidates, run `gdirect scan --ips FILE`. The file holds one public IP per line, and `#` starts a comment.
+
+For scripts, `GDIRECT_ACCESS_TOKEN` can supply an access token instead of a login (`mount` still needs `gdirect login`).
+
+## Mount
+
+Mounting requires the dependencies from `--with-mount` or the Homebrew step above.
+
+```sh
+gdirect mount                        # ~/GoogleDrive
+gdirect mount ~/MyDrive --read-only
+gdirect unmount
+```
+
+- On macOS the mount uses the built-in NFS client, so no FUSE driver is needed. Linux uses FUSE3.
+- On Windows the mount runs in the foreground and stops with Ctrl-C.
+- The mount directory must be empty on macOS/Linux. On Windows it must not exist yet.
+- Writes go to a local cache first and upload in the background. The cache tries to stay under 5 GiB, but open or unsent files can exceed that. Uploads are finished when the log printed by `mount` shows `to upload 0, uploading 0`.
+- `unmount` keeps files that have not been uploaded yet, and the next `mount` uploads them.
+- `-j` sets how many rclone transfers run at once.
+
+## Your data and logout
+
+Credentials, scanned IPs and settings are stored in one private SQLite file:
+
+- macOS: `~/Library/Application Support/gdirect/state.sqlite3`
+- Linux: `~/.local/share/gdirect/state.sqlite3`
+- Windows: `%LOCALAPPDATA%\gdirect\state.sqlite3`
+
+Use `--db PATH` to choose another file. `gdirect logout` removes the stored credentials and keeps the scanned IPs. Unmount before logging out. To switch Google accounts, run `gdirect login --reauth`.
+
+Sign-in problems, the 7-day expiry and other questions are covered in [Troubleshooting](docs/configuration/README.md#troubleshooting).
+
+## Build from source
+
+Requires Rust 1.91+, a C++ compiler, make, curl and OpenSSL 3.
 
 ```sh
 git clone https://github.com/mizorewww/gdirect.git
@@ -61,39 +145,4 @@ cd gdirect
 cargo install --path . --locked
 ```
 
-## Usage
-
-**First login:** download a Desktop OAuth client JSON using the [configuration guide](docs/configuration/README.md), then:
-
-```sh
-gdirect login --client-secret ~/Downloads/client_secret.json
-gdirect browse
-```
-
-Working Google IPs are discovered automatically and stored in local SQLite. `gdirect scan` rescans; `gdirect scan --list` lists results. Downloads default to 8 connections.
-
-| Key | Browser action |
-| --- | --- |
-| `j/k`, `↑/↓` | Select |
-| Enter, `l/→` | Open folder |
-| `h/←`, Backspace | Parent folder |
-| `d` | Download; export Google documents as PDF |
-| `+/-` | Download connections (1–16) |
-| `r` | Refresh |
-| `c` | Cancel, keeping partial data |
-| `q` | Quit |
-
-```sh
-gdirect browse -o downloads -j 8
-gdirect ls root --json
-gdirect download FILE_ID -o downloads/file.zip
-gdirect upload ./file.zip
-gdirect upload ./file.zip --parent FOLDER_ID --name backup.zip
-gdirect mount                    # ~/GoogleDrive; requires mount dependencies
-gdirect mount ~/MyDrive --read-only
-gdirect unmount                  # Windows foreground mount: Ctrl-C
-```
-
-Repeat a download/upload command after an interruption to resume. Uploads use 8 MiB chunks and create new files; they do not overwrite existing names. Mount writes upload through a local cache with a 5 GiB cleanup target (open/pending files may exceed it). Wait for uploads before unmounting; the mount command prints the log path. Mount traffic follows system routing; direct CLI transfers require system TUN software to route selected IPs directly.
-
-Credentials, scanned IPs and settings use local SQLite: macOS `~/Library/Application Support/gdirect/state.sqlite3`, Linux `~/.local/share/gdirect/state.sqlite3`, Windows `%LOCALAPPDATA%\gdirect\state.sqlite3`. Override with `--db PATH`. `GDIRECT_ACCESS_TOKEN` is also supported for CLI transfers; mounting needs the refreshable login above.
+Windows builds use the MinGW GNU toolchain. In an MSYS2 MINGW64 shell, install `make patch tar xz mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl mingw-w64-x86_64-pkgconf`, run `rustup target add x86_64-pc-windows-gnu`, set `OPENSSL_PREFIX=$(cygpath -m /mingw64)`, then run the two commands above with `--target x86_64-pc-windows-gnu` added to `cargo install`.
