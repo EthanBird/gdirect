@@ -1,63 +1,55 @@
-# First-time Google Drive setup
+# Google setup
 
-[中文](README.zh-CN.md) · [Installation and usage](../../README.md)
+[中文](README.zh-CN.md) · [Back to README](../../README.md)
 
-**gdirect 0.1.1+ includes the official Google Rust authentication SDK. You do not need Google Cloud CLI or a separate SDK installation.** Installing the program does not authorize access to your Drive: complete the browser login below once.
+gdirect signs in with an OAuth client that you create in your own Google Cloud project. Expect about 10 minutes, once. Google does not charge for this, and gdirect never ships or uses anyone else's client.
 
-## 1. Download your Desktop OAuth client JSON
+## 1. Create a Desktop OAuth client
 
-1. Open [Google Cloud Console](https://console.cloud.google.com/) and select or create your own project.
+1. Open the [Google Cloud console](https://console.cloud.google.com/) and select or create a project.
 2. Enable the [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com) for that project.
-3. Open **Google Auth Platform**. Configure the app name and contact email. For a personal Google account, choose an **External** audience; while the app is in **Testing**, add your own Google account as a test user.
-4. Under **Data Access**, add `https://www.googleapis.com/auth/drive`. This is needed to browse existing files, upload, download, and use a writable mount.
-5. Under **Clients**, create an OAuth client with application type **Desktop app**. Download its JSON file. A web client, API key, or service-account JSON is not a replacement.
+3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview) and click **Get started**. Under **Branding**, enter an app name and your email. For **Audience**, choose **External**.
+4. Under **Data Access**, click **Add or remove scopes** and add `https://www.googleapis.com/auth/drive`. Browsing existing files, downloading, uploading and writable mounts all need it.
+5. Under **Clients**, click **Create client**, choose application type **Desktop app**, and download the JSON. A web client, an API key or a service-account JSON will not work.
+6. Under **Audience**, click **Publish app** to move it from **Testing** to **In production**. This is recommended for personal use. While the app is in Testing, Google expires your sign-in after **7 days** and you have to run `gdirect login --reauth` again. A published app does not need Google's verification for your own use. You will just see the warning screen described below.
 
-Each user can use their own project/client. gdirect does not distribute the maintainer's personal Google credentials. For Google's description of this flow, see [OAuth for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app).
+   If you would rather stay in Testing, add your Google account under **Audience → Test users** instead.
 
 ## 2. Sign in
 
-macOS / Linux:
-
 ```sh
 gdirect login --client-secret ~/Downloads/client_secret.json
-gdirect ls root
+```
+
+On Windows PowerShell, use `"$HOME\Downloads\client_secret.json"`, and in both cases your actual file name.
+
+1. A browser opens on this computer. If it does not, copy the printed URL into a browser **on the same computer**, because the sign-in returns to a temporary local port.
+2. Choose your Google account.
+3. Google shows **"Google hasn't verified this app"**. This is expected, because it is your own app. Click **Advanced**, then **Go to *your app name* (unsafe)**. In Testing mode, click **Continue** instead.
+4. Allow access to Google Drive.
+5. Return to the terminal and wait for `Logged in`.
+
+You can then delete the downloaded JSON. Its client is saved in gdirect's private database for later `--reauth`.
+
+```sh
+gdirect ls root     # quick check
 gdirect browse
 ```
 
-Windows PowerShell:
+## Troubleshooting
 
-```powershell
-gdirect login --client-secret "$HOME\Downloads\client_secret.json"
-gdirect ls root
-gdirect browse
-```
+| Problem | Fix |
+| --- | --- |
+| `access_denied` or "app is being tested" | Publish the app (step 6), or add this account as a test user |
+| `redirect_uri_mismatch` | The JSON is not a **Desktop app** client. Create one as in step 5 |
+| `Drive API 403 … insufficient permission` | Enable the Drive API in the **same** project as the client and add the Drive scope (step 4). Then run `gdirect login --reauth` and allow Drive access |
+| `refresh credential expired or revoked` | Run `gdirect login --reauth`. If this happens every 7 days, the app is still in Testing (step 6) |
+| Sign-in times out or shows a network error | Your system network must reach `oauth2.googleapis.com` and `accounts.google.com`; see [How it works](../../README.md#how-it-works) |
+| Wrong account, or switching accounts | `gdirect login --reauth`, then choose the other account |
 
-Use your downloaded filename. The command opens a browser on the same computer; select the test-user account and grant Drive access. Return to the terminal and wait for `Logged in`. If the browser does not open, copy the printed URL into a browser on that computer. The local callback uses a temporary loopback port.
+- **Mounts and new credentials:** a running mount keeps its old credentials. After `--reauth`, unmount and mount again.
+- **Headless servers:** browser sign-in needs a browser on the same machine. Sign in on a desktop, or import an existing `authorized_user` credentials JSON with `gdirect login --credentials PATH`. Google Cloud SDK application-default credentials usually lack the Drive scope.
+- **Logging out:** `gdirect logout` deletes the stored credentials. You can also revoke access at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
+- **Keep files private:** treat the client JSON, credentials JSON and the SQLite database like passwords. Do not commit or share them.
 
-After login, gdirect saves refreshable credentials in its private local SQLite database and the embedded SDK refreshes access tokens. Routine use does not need the JSON file or gcloud. To sign in again with the saved client:
-
-```sh
-gdirect login --reauth
-```
-
-## 3. Mount, if needed
-
-Install the optional mount dependencies listed in the [main README](../../README.md), or use the one-command installer with `--with-mount` / `-WithMount`. Then:
-
-```sh
-gdirect mount
-gdirect unmount
-```
-
-The default mount directory is `~/GoogleDrive`; Windows uses foreground mode and stops with Ctrl-C. Mounts use rclone and system network routing. CLI uploads/downloads use scanned direct IPs. gdirect exports private credentials for rclone automatically; no second gcloud/ADC login is needed.
-
-## Existing credentials and troubleshooting
-
-- Existing `authorized_user` ADC can be imported with `gdirect login --credentials PATH`. The standard ADC location is also detected automatically. This reads a file; it does not launch gcloud.
-- `access_denied` / a test-user error: add the selected account under the app's Audience settings and try again.
-- `redirect_uri_mismatch`: use a **Desktop app** client, not a web client.
-- Drive API disabled / insufficient permissions: enable Drive API in the same client project, then repeat browser login and grant the Drive scope.
-- With an External app in Testing, Drive refresh credentials expire after **7 days**. Reauthorize, or follow Google’s production/verification requirements for longer-lived authorization. See [Google’s token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration).
-- If a refresh credential expires or is revoked, run `gdirect login --reauth` (or supply the client JSON again). Unmount and remount an existing mount after reauthorizing, so its background process uses the new credentials.
-- Headless servers can import an existing `authorized_user` credentials JSON with `--credentials PATH`. Browser login needs a browser on the same computer. Treat credential JSON and SQLite files like passwords; do not commit them or share them with others.
-- Check `gdirect --version`: **0.1.0 still uses gcloud**. Upgrade before following this guide.
+Google's reference: [OAuth for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app), [refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration).
