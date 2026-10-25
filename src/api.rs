@@ -26,6 +26,15 @@ impl File {
     pub fn workspace(&self) -> bool {
         self.mime_type.starts_with("application/vnd.google-apps.")
     }
+    /// Binary files, or Google documents that Drive can export (as PDF in browse).
+    pub fn downloadable(&self) -> bool {
+        !self.workspace()
+            || matches!(
+                self.mime_type
+                    .trim_start_matches("application/vnd.google-apps."),
+                "document" | "spreadsheet" | "presentation" | "drawing"
+            )
+    }
 }
 #[derive(Clone)]
 pub struct Api {
@@ -265,6 +274,22 @@ mod tests {
             r#"{"error":{"message":"No access.","errors":[{"reason":"insufficientFilePermissions"}]}}"#,
         );
         assert_eq!(file, "Drive API 403 Forbidden: No access.");
+    }
+    #[test]
+    fn only_binary_and_exportable_items_download() {
+        let file = |mime: &str| File {
+            id: "x".into(),
+            name: "x".into(),
+            mime_type: mime.into(),
+            size: None,
+            modified_time: None,
+            md5_checksum: None,
+            resource_key: None,
+        };
+        assert!(file("application/zip").downloadable());
+        assert!(file("application/vnd.google-apps.document").downloadable());
+        assert!(!file("application/vnd.google-apps.shortcut").downloadable());
+        assert!(!file("application/vnd.google-apps.form").downloadable());
     }
     #[test]
     fn names_cannot_escape() {

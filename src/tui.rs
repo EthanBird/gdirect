@@ -167,12 +167,13 @@ impl View {
                     file.modified_time.as_deref().unwrap_or("—")
                 )),
                 Line::from(""),
-                Line::from(if file.workspace() {
-                    "d  Export document as PDF"
+                if !file.downloadable() {
+                    Line::from("Cannot be downloaded (shortcut, form, site or map)").dark_gray()
+                } else if file.workspace() {
+                    Line::from("d  Export document as PDF").cyan()
                 } else {
-                    "d  Add to download queue"
-                })
-                .cyan(),
+                    Line::from("d  Add to download queue").cyan()
+                },
             ],
             None => vec![Line::from(if self.loading {
                 "Loading Drive…"
@@ -498,6 +499,13 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, api: Api, options: Option
                 KeyCode::Char('r') => {
                     view.loading = true;
                     fetch(&api, &tx, view.path.last().unwrap().0.clone(), false);
+                }
+                KeyCode::Char('d')
+                    if view
+                        .selected()
+                        .is_some_and(|f| !f.folder() && !f.downloadable()) =>
+                {
+                    view.status = "This item has no downloadable content".into();
                 }
                 KeyCode::Char('d') => {
                     if let Some(file) = view.selected().filter(|f| !f.folder()).cloned()

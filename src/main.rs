@@ -305,6 +305,15 @@ fn start_download(
             !meta.folder(),
             "select a file inside the folder with gdirect browse"
         );
+        anyhow::ensure!(
+            meta.downloadable(),
+            "{} has no downloadable content",
+            meta.mime_type
+        );
+        anyhow::ensure!(
+            !meta.workspace() || export.is_some(),
+            "this is a Google document; add --export application/pdf (or another export MIME type)"
+        );
     }
     let output = output
         .or_else(|| {
