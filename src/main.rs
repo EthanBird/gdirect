@@ -116,14 +116,24 @@ enum Commands {
     },
     /// Unmount this database's background mount
     Unmount,
-    /// Upload a local file (repeat the command to resume)
+    /// Create a folder in Drive (or return existing folder ID if same name exists)
+    Mkdir {
+        /// Folder name (or / separated path like 我的资源/学习资料/张竣齐)
+        name: String,
+        /// Parent folder ID
+        #[arg(long, default_value = "root")]
+        parent: String,
+        #[command(flatten)]
+        route: Route,
+    },
+    /// Upload a local file or directory recursively (repeat the command to resume)
     Upload {
-        /// Local file to upload
+        /// Local file or directory to upload
         file: PathBuf,
         /// Destination folder ID
         #[arg(long, default_value = "root")]
         parent: String,
-        /// Name in Drive (default: local file name)
+        /// Name in Drive (default: local file or folder name)
         #[arg(long)]
         name: Option<String>,
         #[command(flatten)]
@@ -225,6 +235,23 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Commands::Mkdir {
+            name,
+            parent,
+            route,
+        } => {
+            let api = api::Api::new(db_path, Some(direct_ip(&db, route.ip)?))?;
+            let mut current = parent;
+            for part in name
+                .split(['/', '\\'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let folder = api.ensure_folder(&current, part)?;
+                println!("{}\t{}", folder.id, folder.name);
+                current = folder.id;
+            }
+        }
         Commands::Upload {
             file,
             parent,
@@ -232,8 +259,12 @@ fn run(cli: Cli) -> Result<()> {
             route,
         } => {
             let api = api::Api::new(db_path, Some(direct_ip(&db, route.ip)?))?;
-            let uploaded = api.upload(&file, &parent, name.as_deref())?;
-            println!("{}\t{}", uploaded.id, uploaded.name);
+            if file.is_dir() {
+                api.upload_tree(&file, &parent, name.as_deref())?;
+            } else {
+                let uploaded = api.upload(&file, &parent, name.as_deref())?;
+                println!("{}\t{}", uploaded.id, uploaded.name);
+            }
         }
         Commands::Download {
             file,

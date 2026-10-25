@@ -221,6 +221,101 @@ impl Api {
             .map(|json| serde_json::from_str(&json).map_err(Into::into))
             .unwrap_or_else(|| Ok(Vec::new()))
     }
+    pub fn ensure_folder(&self, parent: &str, name: &str) -> Result<File> {
+        ensure!(crate::drive::valid_id(parent), "invalid parent folder ID");
+        ensure!(!name.trim().is_empty(), "folder name cannot be empty");
+        let existing = self.list(parent)?;
+        if let Some(found) = existing.into_iter().find(|f| f.folder() && f.name == name) {
+            return Ok(found);
+        }
+        let token = self.token()?;
+        let mut last_err = None;
+        for attempt in 0..8 {
+            let response = self
+                .client
+                .post("https://www.googleapis.com/drive/v3/files")
+                .query(&[
+                    (
+                        "fields",
+                        "id,name,mimeType,size,modifiedTime,md5Checksum,resourceKey",
+                    ),
+                    ("supportsAllDrives", "true"),
+                ])
+                .bearer_auth(&token)
+                .json(&serde_json::json!({
+                    "name": name,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": [parent],
+                }))
+                .send()
+                .map_err(|e| e.without_url())?;
+            match checked(response) {
+                Ok(data) => return Ok(serde_json::from_value(data)?),
+                Err(e) if e.to_string().contains("Quota exceeded") && attempt < 7 => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap())
+    }
+    pub fn upload_tree(&self, path: &Path, parent: &str, name: Option<&str>) -> Result<()> {
+        let meta = std::fs::metadata(path).context("cannot stat local path")?;
+        if meta.is_file() {
+            let file_name = name
+                .or_else(|| path.file_name().and_then(|s| s.to_str()))
+                .context("file name must be UTF-8")?;
+            let existing = self.list(parent)?;
+            if let Some(done) = existing.into_iter().find(|f| {
+                !f.folder()
+                    && f.name == file_name
+                    && f.size.as_deref() == Some(&meta.len().to_string())
+            }) {
+                println!("SKIP\t{}\t{}", done.id, done.name);
+                return Ok(());
+            }
+            let uploaded = self.upload(path, parent, Some(file_name))?;
+            println!("FILE\t{}\t{}", uploaded.id, uploaded.name);
+            return Ok(());
+        }
+        ensure!(meta.is_dir(), "path must be a file or directory");
+        let dir_name = name
+            .or_else(|| path.file_name().and_then(|s| s.to_str()))
+            .context("directory name must be UTF-8")?;
+        let folder = self.ensure_folder(parent, dir_name)?;
+        println!("DIR\t{}\t{}", folder.id, folder.name);
+        let mut entries: Vec<_> = std::fs::read_dir(path)?
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(|e| {
+            let m = e.metadata().ok();
+            let is_dir = m.as_ref().map(|x| x.is_dir()).unwrap_or(false);
+            let len = m.map(|x| x.len()).unwrap_or(u64::MAX);
+            (is_dir, len, e.file_name())
+        });
+        for entry in entries {
+            let child_path = entry.path();
+            for attempt in 0..3 {
+                match self.upload_tree(&child_path, &folder.id, None) {
+                    Ok(()) => break,
+                    Err(e) if attempt < 2 => {
+                        eprintln!(
+                            "warning: retrying {} ({e:#})",
+                            child_path.display()
+                        );
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "error uploading {}: {e:#}",
+                            child_path.display()
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 pub fn validate_token(token: String) -> Result<String> {
     ensure!(
