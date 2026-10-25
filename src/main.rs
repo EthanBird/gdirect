@@ -1,194 +1,193 @@
+mod api;
+mod download;
 mod drive;
-use anyhow::{Context, Result, bail, ensure};
-use clap::Parser;
-use std::{ffi::CString, fs, io::Read, net::IpAddr, path::PathBuf, process::Command};
-use url::Url;
+mod store;
+mod tui;
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use download::allowed_url;
+use std::{net::IpAddr, path::PathBuf};
 
-/// Download a Google Drive file directly with libaria2 1.37.0.
 #[derive(Parser)]
-#[command(version)]
-struct Args {
-    /// File ID or Google Drive sharing URL
-    file: String,
-    /// Destination filename (partial downloads use a .aria2 sidecar)
-    #[arg(short, long)]
-    output: PathBuf,
-    /// Connect to this IP instead of system DNS, including media redirects
-    #[arg(long)]
+#[command(version, about = "Browse and download Google Drive with libaria2")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+    /// Legacy download: file ID or sharing URL
+    file: Option<String>,
+    /// Output file; in browse mode, download directory
+    #[arg(short, long, global = true)]
+    output: Option<PathBuf>,
+    #[arg(long, global = true)]
     ip: Option<IpAddr>,
-    /// TLS SNI hostname; use 'off' to omit SNI. Certificate checks use the real host.
-    #[arg(long, requires = "ip")]
+    #[arg(long, global = true, requires = "ip")]
     sni: Option<String>,
-    /// Read a Drive-scoped access token from gcloud (otherwise GDIRECT_ACCESS_TOKEN)
-    #[arg(long)]
-    gcloud: bool,
-    /// Export a Workspace document, e.g. application/pdf (requires authentication)
-    #[arg(long)]
-    export: Option<String>,
-    /// Parallel connections
-    #[arg(short = 'j', long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(1..=16))]
-    connections: u8,
-    /// Custom PEM CA bundle (certificate verification remains enabled)
-    #[arg(long)]
+    /// Connections per download (default: saved setting or 8)
+    #[arg(short='j',long,global=true,value_parser=clap::value_parser!(u8).range(1..=16))]
+    connections: Option<u8>,
+    /// Local SQLite state file
+    #[arg(long, global = true)]
+    db: Option<PathBuf>,
+    #[arg(long, global = true)]
     ca_cert: Option<PathBuf>,
+    #[arg(long, global = true)]
+    export: Option<String>,
+    /// Use authenticated Drive API (also automatic after login)
+    #[arg(long, global = true)]
+    gcloud: bool,
 }
-
-unsafe extern "C" {
-    fn gdirect_download(
-        url: *const std::ffi::c_char,
-        dir: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        ip: *const std::ffi::c_char,
-        sni: *const std::ffi::c_char,
-        token: *const std::ffi::c_char,
-        ca: *const std::ffi::c_char,
-        connections: i32,
-    ) -> i32;
+#[derive(Subcommand, Clone)]
+enum Commands {
+    /// Import gcloud credentials and verify Drive API access
+    Login {
+        #[arg(long)]
+        reauth: bool,
+    },
+    /// Browse folders; j/k navigate, Enter open, d download, +/- connections
+    Browse {
+        #[arg(default_value = "root")]
+        folder: String,
+    },
+    /// List a Drive folder
+    Ls {
+        #[arg(default_value = "root")]
+        folder: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Download a file ID or sharing URL
+    Download { file: String },
 }
-
-fn allowed_url(url: &Url) -> bool {
-    let h = url.host_str().unwrap_or_default();
-    url.scheme() == "https"
-        && url.port_or_known_default() == Some(443)
-        && url.username().is_empty()
-        && url.password().is_none()
-        && (matches!(
-            h,
-            "drive.google.com"
-                | "drive.usercontent.google.com"
-                | "www.googleapis.com"
-                | "content.googleapis.com"
-                | "drive.googleapis.com"
-        ) || h.ends_with(".googleusercontent.com"))
-}
-
-fn download(args: &Args, url: &Url, token: Option<&str>) -> Result<()> {
-    let output = std::path::absolute(&args.output)?;
-    let parent = output.parent().context("output needs a parent directory")?;
-    fs::create_dir_all(parent)?;
-    let name = output
-        .file_name()
-        .context("output needs a filename")?
-        .to_str()
-        .context("output must be UTF-8")?;
-    let url = CString::new(url.as_str())?;
-    let dir = CString::new(parent.to_str().context("output must be UTF-8")?)?;
-    let name = CString::new(name)?;
-    let ip = CString::new(args.ip.map(|x| x.to_string()).unwrap_or_default())?;
-    let sni = args
-        .sni
-        .as_ref()
-        .map(|s| CString::new(if s == "off" { "" } else { s }))
-        .transpose()?;
-    let token = CString::new(token.unwrap_or_default())?;
-    let ca = CString::new(
-        args.ca_cert
-            .as_ref()
-            .map(|p| p.to_str().context("CA path must be UTF-8"))
-            .transpose()?
-            .unwrap_or_default(),
-    )?;
-    // The CLI is single-threaded; all strings stay alive throughout the synchronous session.
-    let code = unsafe {
-        gdirect_download(
-            url.as_ptr(),
-            dir.as_ptr(),
-            name.as_ptr(),
-            ip.as_ptr(),
-            sni.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
-            token.as_ptr(),
-            ca.as_ptr(),
-            args.connections.into(),
-        )
-    };
-    ensure!(
-        code == 0,
-        "libaria2 failed (code {code}); 1=general/TLS failure, 2=timeout, 3=not found, 6=network, 22=HTTP error, 24=authorization. Check IP/SNI, file permissions, Drive quota and OAuth scope; partial data is retained."
-    );
+fn run(cli: Cli) -> Result<()> {
+    let db_path = cli.db.clone().map(Ok).unwrap_or_else(store::default_path)?;
+    let db = store::Store::open(&db_path)?;
+    let connections = cli
+        .connections
+        .or_else(|| {
+            db.setting("connections")
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(8)
+        .clamp(1, 16);
+    if cli.connections.is_some() {
+        db.set("connections", &connections.to_string())?;
+    }
+    let api = api::Api::new(db_path, cli.ip)?;
+    match cli.command.clone() {
+        Some(Commands::Login { reauth }) => {
+            let email = api.login(reauth)?;
+            println!("Logged in: {email}\nSQLite: {}", api.db.display());
+        }
+        Some(Commands::Ls { folder, json }) => {
+            let files = api.list(&folder)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&files)?);
+            } else {
+                for f in files {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        if f.folder() { "DIR" } else { "FILE" },
+                        f.id,
+                        f.size.as_deref().unwrap_or("-"),
+                        f.name
+                    );
+                }
+            }
+        }
+        Some(Commands::Download { file }) => start_download(&cli, &api, &db, file, connections)?,
+        Some(Commands::Browse { folder }) => tui::run(
+            api,
+            tui::Options {
+                folder,
+                output: cli.output.unwrap_or_else(|| "downloads".into()),
+                ip: cli.ip,
+                sni: cli.sni,
+                connections,
+                ca_cert: cli.ca_cert,
+            },
+        )?,
+        None => {
+            if let Some(file) = cli.file.clone() {
+                start_download(&cli, &api, &db, file, connections)?;
+            } else {
+                tui::run(
+                    api,
+                    tui::Options {
+                        folder: "root".into(),
+                        output: cli.output.unwrap_or_else(|| "downloads".into()),
+                        ip: cli.ip,
+                        sni: cli.sni,
+                        connections,
+                        ca_cert: cli.ca_cert,
+                    },
+                )?;
+            }
+        }
+    }
     Ok(())
 }
-
-fn run(args: Args) -> Result<()> {
-    let file = drive::FileRef::parse(&args.file)?;
-    if let Some(sni) = &args.sni {
-        ensure!(
-            sni == "off"
-                || (!sni.is_empty()
-                    && sni.len() <= 253
-                    && sni.split('.').all(|part| !part.is_empty()
-                        && part.len() <= 63
-                        && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))),
-            "invalid SNI hostname"
-        );
-    }
-    let token = if args.gcloud {
-        let out = Command::new("gcloud")
-            .args(["auth", "print-access-token"])
-            .output()
-            .context("run gcloud auth login with Drive scope first")?;
-        ensure!(
-            out.status.success(),
-            "gcloud could not obtain an access token; check gcloud authentication"
-        );
-        Some(String::from_utf8(out.stdout)?.trim().to_owned())
+fn start_download(
+    cli: &Cli,
+    api: &api::Api,
+    db: &store::Store,
+    file: String,
+    connections: u8,
+) -> Result<()> {
+    let token = if cli.gcloud
+        || db.account()?.is_some()
+        || std::env::var_os("GDIRECT_ACCESS_TOKEN").is_some()
+    {
+        Some(api.download_token()?)
     } else {
-        std::env::var("GDIRECT_ACCESS_TOKEN").ok()
+        None
     };
-    if let Some(token) = &token {
-        ensure!(
-            !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic()),
-            "invalid access token"
+    let id = drive::FileRef::parse(&file)?.id;
+    let metadata = if token.is_some() {
+        Some(api.metadata(&id)?)
+    } else {
+        None
+    };
+    if let Some(meta) = &metadata {
+        anyhow::ensure!(
+            !meta.folder(),
+            "select a file inside the folder with gdirect browse"
         );
     }
-    let mut url = file.url(token.is_some(), args.export.as_deref())?;
-    // Never treat an unrelated existing file as a resumable download.
-    let control = PathBuf::from(format!("{}.aria2", args.output.display()));
-    ensure!(
-        !args.output.exists() || control.exists(),
-        "output already exists without a .aria2 control file; choose another -o path"
+    let output = cli
+        .output
+        .clone()
+        .or_else(|| {
+            metadata
+                .as_ref()
+                .map(|meta| api::destination(std::path::Path::new("downloads"), meta))
+        })
+        .context("public download requires -o FILE")?;
+    let name = metadata
+        .as_ref()
+        .map(|meta| meta.name.as_str())
+        .unwrap_or(&id);
+    let job = db.start_download(&id, name, &output)?;
+    let result = download::run(
+        download::Args {
+            file,
+            output,
+            ip: cli.ip,
+            sni: cli.sni.clone(),
+            token,
+            export: cli.export.clone(),
+            connections,
+            ca_cert: cli.ca_cert.clone(),
+        },
+        None,
     );
-    eprintln!(
-        "libaria2 1.37.0 · IP={} · SNI={} · certificate verification ON",
-        args.ip
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "system DNS".into()),
-        args.sni.as_deref().unwrap_or("original")
-    );
-    for attempt in 0..3 {
-        download(&args, &url, token.as_deref())?;
-        let mut prefix = Vec::new();
-        fs::File::open(&args.output)?
-            .take(1024 * 1024)
-            .read_to_end(&mut prefix)?;
-        let text = String::from_utf8_lossy(&prefix);
-        // Public downloads can return the virus-scan confirmation form with HTTP 200.
-        // Only follow an actual download form; legitimate HTML files stay untouched.
-        if token.is_none() && text.contains("download-form") {
-            let next = drive::confirmation(&text, &url)?;
-            ensure!(attempt < 2, "Drive confirmation loop");
-            fs::remove_file(&args.output)?;
-            url = next;
-            continue;
-        }
-        if token.is_none()
-            && text.contains("<html")
-            && (text.contains("accounts.google.com/ServiceLogin")
-                || text.contains("Google Drive - Quota exceeded")
-                || text.contains("Google Drive - Access denied"))
-        {
-            bail!(
-                "Drive returned a login/quota error page; saved for inspection at {}",
-                args.output.display()
-            );
-        }
-        println!("Saved {}", args.output.display());
-        return Ok(());
-    }
-    unreachable!()
+    db.finish_download(job, if result.is_ok() { "complete" } else { "failed" })?;
+    result
 }
 fn main() {
-    if let Err(error) = run(Args::parse()) {
-        eprintln!("error: {error:#}");
+    if let Err(e) = run(Cli::parse()) {
+        eprintln!("error: {e:#}");
         std::process::exit(1);
     }
 }
@@ -197,15 +196,12 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
-    fn reject_untrusted_urls() {
-        for url in [
-            "http://drive.google.com/x",
-            "https://drive.google.com.evil.test/x",
-            "https://evilgoogleusercontent.com/x",
-            "https://user@drive.google.com/x",
-            "https://drive.google.com:444/x",
-        ] {
-            assert!(!allowed_url(&Url::parse(url).unwrap()));
-        }
+    fn commands_and_global_options() {
+        let cli = Cli::try_parse_from(["gdirect", "browse", "-j", "8"]).unwrap();
+        assert_eq!(cli.connections, Some(8));
+        assert!(matches!(cli.command, Some(Commands::Browse { .. })));
+        assert!(Cli::try_parse_from(["gdirect", "browse", "-j", "0"]).is_err());
+        let cli = Cli::try_parse_from(["gdirect", "file_id", "-o", "out.bin"]).unwrap();
+        assert_eq!(cli.file.as_deref(), Some("file_id"));
     }
 }

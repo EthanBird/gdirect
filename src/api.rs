@@ -1,0 +1,263 @@
+use crate::store::Store;
+use anyhow::{Context, Result, ensure};
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct File {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size: Option<String>,
+    pub modified_time: Option<String>,
+    pub md5_checksum: Option<String>,
+    pub resource_key: Option<String>,
+}
+impl File {
+    pub fn folder(&self) -> bool {
+        self.mime_type == "application/vnd.google-apps.folder"
+    }
+    pub fn workspace(&self) -> bool {
+        self.mime_type.starts_with("application/vnd.google-apps.")
+    }
+}
+#[derive(Clone)]
+pub struct Api {
+    client: Client,
+    pub db: PathBuf,
+}
+impl Api {
+    pub fn new(db: PathBuf, ip: Option<IpAddr>) -> Result<Self> {
+        let mut builder = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(30));
+        if let Some(ip) = ip {
+            builder = builder.resolve("www.googleapis.com", SocketAddr::new(ip, 443));
+        }
+        Ok(Self {
+            client: builder.build()?,
+            db,
+        })
+    }
+    pub fn token(&self) -> Result<String> {
+        if let Ok(token) = std::env::var("GDIRECT_ACCESS_TOKEN") {
+            return validate_token(token);
+        }
+        let db = Store::open(&self.db)?;
+        if let Some(token) = db.token()? {
+            return Ok(token);
+        }
+        self.refresh()
+    }
+    pub fn download_token(&self) -> Result<String> {
+        if let Ok(token) = std::env::var("GDIRECT_ACCESS_TOKEN") {
+            return validate_token(token);
+        }
+        self.refresh()
+    }
+    fn refresh(&self) -> Result<String> {
+        let db = Store::open(&self.db)?;
+        let account = db.account()?;
+        let mut cmd = Command::new("gcloud");
+        cmd.args(["auth", "print-access-token"]);
+        if let Some(account) = &account {
+            cmd.arg("--account").arg(account);
+        }
+        let output = cmd
+            .output()
+            .context("gcloud is required; run gdirect login")?;
+        ensure!(
+            output.status.success(),
+            "gcloud token refresh failed; run gdirect login"
+        );
+        let token = validate_token(String::from_utf8(output.stdout)?.trim().to_owned())?;
+        let account = match account {
+            Some(a) => a,
+            None => active_account()?,
+        };
+        db.save_auth(&account, &token)?;
+        Ok(token)
+    }
+    pub fn login(&self, reauth: bool) -> Result<String> {
+        if reauth {
+            let status = Command::new("gcloud")
+                .args(["auth", "login", "--enable-gdrive-access", "--force"])
+                .status()?;
+            ensure!(status.success(), "gcloud login did not complete");
+        }
+        // Explicit login switches to the currently selected gcloud account.
+        let account = active_account()?;
+        let output = Command::new("gcloud")
+            .args(["auth", "print-access-token", "--account", &account])
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "gcloud token unavailable; run gdirect login --reauth"
+        );
+        let token = validate_token(String::from_utf8(output.stdout)?.trim().into())?;
+        let response = self
+            .client
+            .get("https://www.googleapis.com/drive/v3/about")
+            .query(&[("fields", "user(emailAddress)")])
+            .bearer_auth(&token)
+            .send()
+            .map_err(|e| e.without_url())?;
+        let data = checked(response)?;
+        let email = data["user"]["emailAddress"]
+            .as_str()
+            .context("Drive API did not return an account")?;
+        Store::open(&self.db)?.save_auth(email, &token)?;
+        Ok(email.to_owned())
+    }
+    fn get(&self, path: &str, query: &[(String, String)]) -> Result<serde_json::Value> {
+        let token = self.token()?;
+        let url = format!("https://www.googleapis.com/drive/v3/{path}");
+        let mut response = self
+            .client
+            .get(&url)
+            .query(query)
+            .bearer_auth(token)
+            .send()
+            .map_err(|e| e.without_url())?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && std::env::var_os("GDIRECT_ACCESS_TOKEN").is_none()
+        {
+            response = self
+                .client
+                .get(&url)
+                .query(query)
+                .bearer_auth(self.refresh()?)
+                .send()
+                .map_err(|e| e.without_url())?;
+        }
+        checked(response)
+    }
+    pub fn list(&self, folder: &str) -> Result<Vec<File>> {
+        ensure!(
+            folder
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'),
+            "invalid folder ID"
+        );
+        let mut files = Vec::new();
+        let mut page = String::new();
+        loop {
+            let mut query=vec![("q".into(),format!("'{folder}' in parents and trashed = false")),
+                ("fields".into(),"nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum,resourceKey)".into()),
+                ("pageSize".into(),"1000".into()),("orderBy".into(),"folder,name_natural".into()),
+                ("supportsAllDrives".into(),"true".into()),("includeItemsFromAllDrives".into(),"true".into())];
+            if !page.is_empty() {
+                query.push(("pageToken".into(), page));
+            }
+            let data = self.get("files", &query)?;
+            files.extend(serde_json::from_value::<Vec<File>>(data["files"].clone())?);
+            page = data["nextPageToken"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            if page.is_empty() {
+                break;
+            }
+        }
+        files.sort_by(|a, b| {
+            b.folder()
+                .cmp(&a.folder())
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Store::open(&self.db)?.cache(folder, &serde_json::to_string(&files)?)?;
+        Ok(files)
+    }
+    pub fn metadata(&self, id: &str) -> Result<File> {
+        let id = crate::drive::FileRef::parse(id)?.id;
+        let data = self.get(
+            &format!("files/{id}"),
+            &[
+                (
+                    "fields".into(),
+                    "id,name,mimeType,size,modifiedTime,md5Checksum,resourceKey".into(),
+                ),
+                ("supportsAllDrives".into(), "true".into()),
+            ],
+        )?;
+        Ok(serde_json::from_value(data)?)
+    }
+    pub fn cached(&self, folder: &str) -> Result<Vec<File>> {
+        Store::open(&self.db)?
+            .cached(folder)?
+            .map(|json| serde_json::from_str(&json).map_err(Into::into))
+            .unwrap_or_else(|| Ok(Vec::new()))
+    }
+}
+fn active_account() -> Result<String> {
+    let out = Command::new("gcloud")
+        .args([
+            "auth",
+            "list",
+            "--filter=status:ACTIVE",
+            "--format=value(account)",
+        ])
+        .output()?;
+    let account = String::from_utf8(out.stdout)?.trim().to_owned();
+    ensure!(
+        out.status.success() && !account.is_empty(),
+        "no active gcloud account; run gdirect login --reauth"
+    );
+    Ok(account)
+}
+fn validate_token(token: String) -> Result<String> {
+    ensure!(
+        !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic()),
+        "invalid access token"
+    );
+    Ok(token)
+}
+fn checked(response: reqwest::blocking::Response) -> Result<serde_json::Value> {
+    let status = response.status();
+    let data: serde_json::Value = response.json()?;
+    ensure!(
+        status.is_success(),
+        "Drive API {status}: {}. For insufficient scopes, run gdirect login --reauth",
+        data["error"]["message"]
+            .as_str()
+            .unwrap_or("request failed")
+    );
+    Ok(data)
+}
+pub fn safe_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "download".into()
+    } else {
+        cleaned
+    }
+}
+pub fn destination(dir: &Path, file: &File) -> PathBuf {
+    dir.join(safe_name(&file.name))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn names_cannot_escape() {
+        assert_eq!(safe_name("../a\n"), ".._a_");
+        assert_eq!(safe_name(".."), "download");
+    }
+}

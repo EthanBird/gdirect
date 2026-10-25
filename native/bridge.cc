@@ -1,13 +1,15 @@
 #include <aria2/aria2.h>
 #include "../vendor/gdirect_route.h"
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
 // One synchronous session per call. No C++ exception crosses the C ABI.
-extern "C" int gdirect_download(const char* url, const char* dir, const char* name,
+using ProgressCallback = int (*)(int64_t, int64_t, int, int, void*);
+extern "C" int gdirect_download_ex(const char* url, const char* dir, const char* name,
                                 const char* ip, const char* sni, const char* token,
-                                const char* ca, int connections) noexcept {
+                                const char* ca, int connections, ProgressCallback callback, void* data, bool signals) noexcept {
   aria2::Session* session = nullptr;
   bool initialized = false;
   int result = -1;
@@ -33,7 +35,7 @@ extern "C" int gdirect_download(const char* url, const char* dir, const char* na
     if (token && *token) opts.emplace_back("header", std::string("Authorization: Bearer ") + token);
     if (ca && *ca) opts.emplace_back("ca-certificate", ca);
     aria2::SessionConfig config;
-    config.useSignalHandler = true;
+    config.useSignalHandler = signals;
     session = aria2::sessionNew(opts, config);
     if (session) {
       aria2::A2Gid gid;
@@ -41,9 +43,19 @@ extern "C" int gdirect_download(const char* url, const char* dir, const char* na
         auto last = std::chrono::steady_clock::now();
         while (aria2::run(session, aria2::RUN_ONCE) == 1) {
           auto now = std::chrono::steady_clock::now();
-          if (now-last >= std::chrono::seconds(1)) {
+          if (now-last >= std::chrono::milliseconds(100)) {
             auto stat = aria2::getGlobalStat(session);
-            std::fprintf(stderr, "\rDownloading: %d KiB/s", stat.downloadSpeed / 1024);
+            if (callback) {
+              auto* progress = aria2::getDownloadHandle(session, gid);
+              if (progress) {
+                const int cancel = callback(progress->getCompletedLength(), progress->getTotalLength(),
+                  stat.downloadSpeed, progress->getConnections(), data);
+                aria2::deleteDownloadHandle(progress);
+                if (cancel) aria2::shutdown(session, true);
+              }
+            } else {
+              std::fprintf(stderr, "\rDownloading: %d KiB/s", stat.downloadSpeed / 1024);
+            }
             last = now;
           }
         }
@@ -63,6 +75,12 @@ extern "C" int gdirect_download(const char* url, const char* dir, const char* na
   }
   if (initialized) { try { aria2::libraryDeinit(); } catch (...) { result = -1; } }
   gdirect_ip = gdirect_sni = nullptr;
-  std::fprintf(stderr, "\n");
+  if (!callback) std::fprintf(stderr, "\n");
   return result;
+}
+
+extern "C" int gdirect_download(const char* url, const char* dir, const char* name,
+                                const char* ip, const char* sni, const char* token,
+                                const char* ca, int connections) noexcept {
+  return gdirect_download_ex(url, dir, name, ip, sni, token, ca, connections, nullptr, nullptr, true);
 }

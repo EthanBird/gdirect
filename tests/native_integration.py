@@ -64,8 +64,23 @@ def main():
         if sys.platform == 'darwin' and not ssl_prefix:
             ssl_prefix = subprocess.check_output(['brew','--prefix','openssl@3'],text=True).strip()
         harness = tmp/'main.cc'
-        harness.write_text('''extern "C" int gdirect_download(const char*,const char*,const char*,const char*,const char*,const char*,const char*,int) noexcept;
-int main(int n,char**v){return n==8 ? gdirect_download(v[1],v[2],v[3],"127.0.0.1",v[4],v[5],v[6],v[7][0]-'0') : 99;}
+        harness.write_text('''#include <cstdint>
+#include <cstdlib>
+#include <cstdio>
+#include <thread>
+extern "C" int gdirect_download(const char*,const char*,const char*,const char*,const char*,const char*,const char*,int) noexcept;
+using Callback=int(*)(int64_t,int64_t,int,int,void*);
+extern "C" int gdirect_download_ex(const char*,const char*,const char*,const char*,const char*,const char*,const char*,int,Callback,void*,bool) noexcept;
+int progress(int64_t done,int64_t total,int speed,int connections,void* data){
+  ++*static_cast<int*>(data);return std::getenv("GDIRECT_TEST_CANCEL") && done>0;
+}
+int main(int n,char**v){
+ if(n!=8)return 99;
+ if(!std::getenv("GDIRECT_TEST_CALLBACK"))return gdirect_download(v[1],v[2],v[3],"127.0.0.1",v[4],v[5],v[6],v[7][0]-'0');
+ int result=99,count=0;
+ std::thread worker([&]{result=gdirect_download_ex(v[1],v[2],v[3],"127.0.0.1",v[4],v[5],v[6],v[7][0]-'0',progress,&count,false);});
+ worker.join();std::printf("callbacks=%d\\n",count);return count>0 ? result : 98;
+}
 ''')
         cmd = ['c++','-std=c++11',str(harness),str(ROOT/'native/bridge.cc'),'-I'+str(ROOT/'target/libaria2/include'),str(ROOT/'target/libaria2/lib/libaria2.a')]
         if ssl_prefix:
@@ -111,6 +126,14 @@ int main(int n,char**v){return n==8 ? gdirect_download(v[1],v[2],v[3],"127.0.0.1
             assert any(r[1] and r[1] != 'bytes=0-' for r in requests)
             assert not (tmp/'resume.bin.aria2').exists()
             print('PASS: interrupted download resumes with complete byte integrity')
+            env=dict(os.environ, GDIRECT_TEST_CALLBACK='1')
+            p=subprocess.run(command('callback.bin',path='/slow'),env=env,capture_output=True,text=True,timeout=30)
+            assert p.returncode==0 and 'callbacks=' in p.stdout, (p.returncode,p.stdout,p.stderr)
+            check('callback.bin')
+            p=subprocess.run(command('cancel.bin',path='/slow'),env=dict(env,GDIRECT_TEST_CANCEL='1'),capture_output=True,text=True,timeout=30)
+            assert p.returncode not in (0,98) and (tmp/'cancel.bin.aria2').exists(), (p.returncode,p.stdout,p.stderr)
+            run('cancel.bin',path='/slow');check('cancel.bin')
+            print('PASS: worker-thread progress callback, cancellation and resume')
         finally:
             server.shutdown();server.server_close()
 
