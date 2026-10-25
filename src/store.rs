@@ -112,6 +112,15 @@ impl Store {
         )?;
         Ok(())
     }
+    pub fn clear_auth(&self) -> Result<Option<String>> {
+        let account = self.account()?;
+        let removed = self.conn.execute("DELETE FROM auth", [])?
+            + self.conn.execute(
+                "DELETE FROM settings WHERE key IN ('oauth_credentials','oauth_client') OR key LIKE 'upload:%'",
+                [],
+            )?;
+        Ok(account.or_else(|| (removed > 0).then(|| "saved credentials".into())))
+    }
     pub fn cache(&self, folder: &str, json: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO folders VALUES(?,?,?)",
@@ -158,6 +167,29 @@ mod tests {
             .execute("UPDATE endpoints SET verified_at=0", [])
             .unwrap();
         assert!(db.best_ip().unwrap().is_none());
+    }
+    #[test]
+    fn logout_keeps_endpoints() {
+        let path =
+            std::env::temp_dir().join(format!("gdirect-logout-{}.sqlite3", std::process::id()));
+        let db = Store::open(&path).unwrap();
+        db.endpoint("8.8.8.8", Some(10), None).unwrap();
+        db.save_auth("test@example.com", "secret").unwrap();
+        db.set("oauth_credentials", "{}").unwrap();
+        db.set("upload:x", "{}").unwrap();
+        db.set("connections", "4").unwrap();
+        assert_eq!(
+            db.clear_auth().unwrap().as_deref(),
+            Some("test@example.com")
+        );
+        assert!(db.account().unwrap().is_none());
+        assert!(db.setting("oauth_credentials").unwrap().is_none());
+        assert!(db.setting("upload:x").unwrap().is_none());
+        assert_eq!(db.setting("connections").unwrap().as_deref(), Some("4"));
+        assert!(db.best_ip().unwrap().is_some());
+        assert!(db.clear_auth().unwrap().is_none());
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
     #[test]
     fn expired_tokens_and_settings() {

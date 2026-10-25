@@ -75,6 +75,8 @@ enum Commands {
         #[arg(long, conflicts_with = "reauth")]
         credentials: Option<PathBuf>,
     },
+    /// Remove saved credentials from SQLite; scanned IPs are kept
+    Logout,
     /// Browse folders; j/k navigate, Enter open, d download, +/- connections
     Browse {
         /// Folder ID to open
@@ -180,6 +182,7 @@ fn run(cli: Cli) -> Result<()> {
             scan::run(&db, ips.as_deref())?;
         }
         Commands::Unmount => mount::unmount(&db)?,
+        Commands::Logout => logout(&db)?,
         Commands::Mount {
             path,
             read_only,
@@ -258,6 +261,19 @@ fn run(cli: Cli) -> Result<()> {
             };
             tui::run(api, options)?;
         }
+    }
+    Ok(())
+}
+fn logout(db: &store::Store) -> Result<()> {
+    anyhow::ensure!(
+        db.setting("mount")?.is_none(),
+        "a background mount is recorded; run gdirect unmount first"
+    );
+    match db.clear_auth()? {
+        Some(account) => println!(
+            "Logged out {account}: removed saved credentials, OAuth client, access token and upload sessions. Scanned IPs are kept."
+        ),
+        None => println!("No saved login; nothing removed."),
     }
     Ok(())
 }
@@ -348,6 +364,10 @@ mod tests {
         assert!(parse(&["upload", "f", "--ip", "1.1.1.1", "-j", "2"]).is_err());
         assert!(parse(&["mount", "--ip", "1.1.1.1"]).is_err());
         assert!(parse(&["mount", "-j", "4"]).is_ok());
+        assert!(matches!(
+            parse(&["logout"]).unwrap().command,
+            Some(Commands::Logout)
+        ));
         assert!(parse(&["download", "id", "--sni", "g.cn", "--no-sni"]).is_err());
         let cli = parse(&["download", "id", "--no-sni", "--ip", "1.1.1.1", "-o", "f"]).unwrap();
         let Some(Commands::Download { transfer, .. }) = cli.command else {
