@@ -39,7 +39,9 @@ class Gdirect < Formula
 
   on_linux do
     depends_on arch: :x86_64
-{source('x86_64-unknown-linux-gnu', '    ')}
+    on_intel do
+{source('x86_64-unknown-linux-gnu', '      ')}
+    end
   end
 
   def install
