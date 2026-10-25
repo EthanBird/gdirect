@@ -2,26 +2,26 @@
 class Gdirect < Formula
   desc "Browse, download, upload and mount Google Drive"
   homepage "https://github.com/mizorewww/gdirect"
-  version "0.1.2"
+  version "0.2.0"
   license "GPL-2.0-or-later"
 
   on_macos do
     depends_on macos: :sequoia
     on_arm do
-      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.2/gdirect-0.1.2-aarch64-apple-darwin.tar.gz"
-      sha256 "39092094ad191f8fc0179f9fc33dce0822cf95b1f9e81dde68dd1965548e1a6c"
+      url "https://github.com/mizorewww/gdirect/releases/download/v0.2.0/gdirect-0.2.0-aarch64-apple-darwin.tar.gz"
+      sha256 "5fbdc9bb21b8fa41d372c14feb31ead15d956f0b3cddf532269aa85fd3f97174"
     end
     on_intel do
-      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.2/gdirect-0.1.2-x86_64-apple-darwin.tar.gz"
-      sha256 "61cb14bcdd03327c99035248c057acdd8769d0fdda2873f1164a9fabdfa467cd"
+      url "https://github.com/mizorewww/gdirect/releases/download/v0.2.0/gdirect-0.2.0-x86_64-apple-darwin.tar.gz"
+      sha256 "98c1cd147edeb1ac8b0d185ade0e9a15fa2051a8ac197a02c9a8123985ec5bba"
     end
   end
 
   on_linux do
     depends_on arch: :x86_64
     on_intel do
-      url "https://github.com/mizorewww/gdirect/releases/download/v0.1.2/gdirect-0.1.2-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "abd34c87146a3ddb7d336f5be2b90c9dd5dffc6997b86758483aac8fb3d70cad"
+      url "https://github.com/mizorewww/gdirect/releases/download/v0.2.0/gdirect-0.2.0-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "2b462ff53f328466734d290817592b13b65dadec311c92c7a81591884285e067"
     end
   end
 
@@ -35,12 +35,11 @@ class Gdirect < Formula
 
   def caveats
     <<~EOS
-      First login needs a Google Desktop OAuth client JSON:
+      Next: create a Google OAuth client (one time), then sign in:
+        https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md
         gdirect login --client-secret /path/to/client_secret.json
-      Setup guide: https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md
-      Mounting additionally requires rclone (plus FUSE3 on Linux):
+      Mounting also needs rclone (and your distro's fuse3 package on Linux):
         brew install rclone
-        gdirect mount
     EOS
   end
 
