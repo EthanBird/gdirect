@@ -16,7 +16,7 @@ brew install mizorewww/gdirect/gdirect
 如需从源码构建，先安装 Rust、C++ 编译器、make、curl 和 OpenSSL，然后执行：
 
 ```sh
-git clone git@github.com:mizorewww/gdirect.git
+git clone https://github.com/mizorewww/gdirect.git
 cd gdirect
 
 # macOS

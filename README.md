@@ -16,7 +16,7 @@ Available builds: macOS 15+ (Apple Silicon / Intel), Linux x86_64 (glibc 2.35+),
 To build from source, install Rust, a C++ compiler, make, curl and OpenSSL, then:
 
 ```sh
-git clone git@github.com:mizorewww/gdirect.git
+git clone https://github.com/mizorewww/gdirect.git
 cd gdirect
 
 # macOS
