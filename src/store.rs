@@ -135,11 +135,11 @@ impl Store {
             .query_row("SELECT account FROM auth WHERE id=1", [], |r| r.get(0))
             .optional()?)
     }
-    pub fn save_auth(&self, account: &str, token: &str) -> Result<()> {
-        // gcloud issues ~1h access tokens; refresh early. Refresh credentials stay with gcloud.
+    pub fn save_auth(&self, account: &str, token: &str, expires_in: i64) -> Result<()> {
+        // Refresh five minutes before Google's stated expiry.
         self.conn.execute(
             "INSERT OR REPLACE INTO auth VALUES(1,?,?,?)",
-            params![account, token, now() + 2400],
+            params![account, token, now() + (expires_in - 300).max(60)],
         )?;
         Ok(())
     }
@@ -225,7 +225,7 @@ mod tests {
             std::env::temp_dir().join(format!("gdirect-logout-{}.sqlite3", std::process::id()));
         let db = Store::open(&path).unwrap();
         db.endpoint("8.8.8.8", Some(10), None).unwrap();
-        db.save_auth("test@example.com", "secret").unwrap();
+        db.save_auth("test@example.com", "secret", 3600).unwrap();
         db.set("oauth_credentials", "{}").unwrap();
         db.set("upload:x", "{}").unwrap();
         db.set("connections", "4").unwrap();
@@ -247,7 +247,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE auth(id INTEGER PRIMARY KEY, account TEXT, token TEXT, expires_at INTEGER); CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);").unwrap();
         let db = Store { conn };
-        db.save_auth("test@example.com", "secret").unwrap();
+        db.save_auth("test@example.com", "secret", 3600).unwrap();
         assert_eq!(db.token().unwrap().as_deref(), Some("secret"));
         db.conn.execute("UPDATE auth SET expires_at=0", []).unwrap();
         assert!(db.token().unwrap().is_none());

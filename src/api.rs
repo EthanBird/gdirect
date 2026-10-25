@@ -66,8 +66,8 @@ impl Api {
     fn refresh(&self) -> Result<String> {
         let db = Store::open(&self.db)?;
         let credentials = crate::auth::credentials(&db)?;
-        let token = validate_token(crate::auth::token(&credentials)?)?;
-        let email = self.account_for_token(&token)?;
+        let token = crate::auth::refresh(&credentials)?;
+        let email = self.account_for_token(&token.access_token)?;
         if let Some(account) = db.account()? {
             ensure!(
                 email == account,
@@ -75,8 +75,8 @@ impl Api {
             );
         }
         db.set("oauth_credentials", &serde_json::to_string(&credentials)?)?;
-        db.save_auth(&email, &token)?;
-        Ok(token)
+        db.save_auth(&email, &token.access_token, token.expires_in)?;
+        Ok(token.access_token)
     }
     fn account_for_token(&self, token: &str) -> Result<String> {
         let response = self
@@ -100,8 +100,8 @@ impl Api {
     ) -> Result<String> {
         let db = Store::open(&self.db)?;
         let credentials = crate::auth::prepare_login(&db, client, import, reauth)?;
-        let token = validate_token(crate::auth::token(&credentials)?)?;
-        let email = self.account_for_token(&token)?;
+        let token = crate::auth::refresh(&credentials)?;
+        let email = self.account_for_token(&token.access_token)?;
         db.set("oauth_credentials", &serde_json::to_string(&credentials)?)?;
         if client.is_some() {
             db.set(
@@ -109,7 +109,7 @@ impl Api {
                 &serde_json::to_string(&credentials.client())?,
             )?;
         }
-        db.save_auth(&email, &token)?;
+        db.save_auth(&email, &token.access_token, token.expires_in)?;
         Ok(email)
     }
     fn get(&self, path: &str, query: &[(String, String)]) -> Result<serde_json::Value> {

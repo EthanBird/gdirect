@@ -1,6 +1,7 @@
 use crate::store::Store;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -81,24 +82,67 @@ pub fn credentials(db: &Store) -> Result<Credentials> {
         "first login requires a Desktop OAuth client JSON: gdirect login --client-secret PATH\nSetup: {CONFIG_GUIDE}"
     )
 }
-pub fn token(credentials: &Credentials) -> Result<String> {
-    sdk_token(serde_json::to_value(credentials)?, TOKEN_URI)
+#[derive(Debug)]
+pub struct Token {
+    pub access_token: String,
+    pub expires_in: i64,
 }
-fn sdk_token(data: Value, endpoint: &str) -> Result<String> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async {
-        // The SDK starts its credential cache task while building credentials.
-        let credentials = google_cloud_auth::credentials::user_account::Builder::new(data)
-            .with_token_uri(endpoint).build_access_token_credentials()
-            .map_err(|_| anyhow::anyhow!("invalid Google user credentials"))?;
-        let token = tokio::time::timeout(Duration::from_secs(45), credentials.access_token()).await
-            .context("Google token refresh timed out; check access to oauth2.googleapis.com")?
-            .map_err(|_| anyhow::anyhow!("Google credential refresh failed; run gdirect login --reauth to authorize again"))?;
-        Ok(token.token)
+fn http() -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(45))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
+}
+fn post_token(endpoint: &str, form: &[(&str, &str)]) -> Result<(StatusCode, Value)> {
+    let response = http()?.post(endpoint).form(form).send().map_err(|e| {
+        anyhow::anyhow!(
+            "cannot reach Google's token endpoint ({}); check access to oauth2.googleapis.com",
+            e.without_url()
+        )
+    })?;
+    let status = response.status();
+    let text = response.text().map_err(|e| e.without_url())?;
+    Ok((status, serde_json::from_str(&text).unwrap_or_default()))
+}
+// Google's OAuth error code and description, e.g. "invalid_client: The OAuth client was deleted."
+fn google_error(status: StatusCode, data: &Value) -> String {
+    let code = data["error"].as_str().unwrap_or("unknown_error");
+    match data["error_description"].as_str() {
+        Some(description) => format!("{status} {code}: {description}"),
+        None => format!("{status} {code}"),
+    }
+}
+fn refreshed(status: StatusCode, data: &Value) -> Result<Token> {
+    if !status.is_success() {
+        if data["error"] == "invalid_grant" {
+            bail!("refresh credential expired or revoked; run gdirect login --reauth");
+        }
+        bail!(
+            "Google token refresh failed ({}); run gdirect login --reauth",
+            google_error(status, data)
+        );
+    }
+    let access_token = data["access_token"]
+        .as_str()
+        .filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_graphic()))
+        .context("Google returned an invalid access token")?;
+    Ok(Token {
+        access_token: access_token.into(),
+        expires_in: data["expires_in"].as_i64().unwrap_or(3600),
     })
+}
+pub fn refresh(credentials: &Credentials) -> Result<Token> {
+    let (status, data) = post_token(
+        TOKEN_URI,
+        &[
+            ("client_id", &credentials.client_id),
+            ("client_secret", &credentials.client_secret),
+            ("refresh_token", &credentials.refresh_token),
+            ("grant_type", "refresh_token"),
+        ],
+    )?;
+    refreshed(status, &data)
 }
 pub fn prepare_login(
     db: &Store,
@@ -247,28 +291,22 @@ fn browser_login(client: &Client) -> Result<Credentials> {
             break code.context("Google authorization was declined")?;
         }
     };
-    let http = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
-    let response = http
-        .post(TOKEN_URI)
-        .form(&[
+    let (status, token) = post_token(
+        TOKEN_URI,
+        &[
             ("client_id", client_id),
             ("client_secret", secret),
             ("code", code.as_str()),
             ("code_verifier", verifier.as_str()),
             ("redirect_uri", redirect.as_str()),
             ("grant_type", "authorization_code"),
-        ])
-        .send()
-        .map_err(|e| e.without_url())?;
+        ],
+    )?;
     ensure!(
-        response.status().is_success(),
+        status.is_success(),
         "Google rejected the authorization code ({}); verify the Desktop OAuth client configuration",
-        response.status()
+        google_error(status, &token)
     );
-    let token: Value = response.json().map_err(|e| e.without_url())?;
     let refresh_token = token["refresh_token"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -300,41 +338,49 @@ pub fn export_credentials(credentials: &Credentials, path: &Path) -> Result<()> 
 mod tests {
     use super::*;
     #[test]
-    fn sdk_refresh_runs_inside_tokio_and_can_repeat() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut length = 0;
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap();
-                    }
-                }
-                let mut body = vec![0; length];
-                reader.read_exact(&mut body).unwrap();
-                let request: Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(request["refresh_token"], "fixture-refresh");
-                assert_eq!(request["grant_type"], "refresh_token");
-                let body =
-                    r#"{"access_token":"fixture-access","expires_in":3600,"token_type":"Bearer"}"#;
-                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
-            }
-        });
-        for _ in 0..2 {
-            assert_eq!(sdk_token(serde_json::json!({"type":"authorized_user","client_id":"fixture","client_secret":"fixture","refresh_token":"fixture-refresh"}),&endpoint).unwrap(),"fixture-access");
-        }
-        server.join().unwrap();
+    fn token_responses_keep_google_error_codes() {
+        let token = refreshed(
+            StatusCode::OK,
+            &serde_json::json!({"access_token":"ya29.a","expires_in":3599}),
+        )
+        .unwrap();
+        assert_eq!(
+            (token.access_token.as_str(), token.expires_in),
+            ("ya29.a", 3599)
+        );
+        let expired = refreshed(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({"error":"invalid_grant","error_description":"Token has been expired or revoked."}),
+        )
+        .unwrap_err();
+        assert!(
+            expired
+                .to_string()
+                .starts_with("refresh credential expired or revoked")
+        );
+        let deleted = refreshed(
+            StatusCode::UNAUTHORIZED,
+            &serde_json::json!({"error":"deleted_client","error_description":"The OAuth client was deleted."}),
+        )
+        .unwrap_err();
+        assert!(
+            deleted
+                .to_string()
+                .contains("401 Unauthorized deleted_client: The OAuth client was deleted.")
+        );
+        assert!(
+            refreshed(StatusCode::BAD_GATEWAY, &Value::Null)
+                .unwrap_err()
+                .to_string()
+                .contains("502 Bad Gateway unknown_error")
+        );
+        assert!(
+            refreshed(
+                StatusCode::OK,
+                &serde_json::json!({"access_token":"bad token"})
+            )
+            .is_err()
+        );
     }
     #[test]
     fn pkce_rfc7636_vector() {
