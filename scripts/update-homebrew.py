@@ -45,7 +45,7 @@ class Gdirect < Formula
   def install
     libexec.install "gdirect", "cacert.pem"
     bin.write_exec_script libexec/"gdirect"
-    doc.install "README.md", "README.zh-CN.md", "BUILD-INFO.txt"
+    doc.install "README.md", "README.zh-CN.md", "BUILD-INFO.json"
     (share/"licenses/gdirect").install Dir["*LICENSE*"]
   end
 
