@@ -68,9 +68,10 @@ pub fn run(
         db.setting("mount")?.is_none(),
         "a mount is already recorded; run gdirect unmount first"
     );
-    api.download_token()?;
-    let credentials_data = crate::auth::credentials(&db)?;
     let account = db.account()?.context("run gdirect login first")?;
+    let credentials_data = crate::auth::credentials(&db)?;
+    // Fail here rather than inside rclone if the saved login no longer works.
+    crate::auth::refresh(&credentials_data)?;
     let email = account.as_str();
     let path = path
         .map(Path::to_path_buf)
@@ -163,12 +164,14 @@ pub fn run(
         command.arg("--read-only");
     }
     println!(
-        "Mount: {}\nAccount: {email}\nLog: {}\nMount traffic follows system routing.",
+        "Mount: {}\nAccount: {email}\nLog: {}",
         path.display(),
         log.display()
     );
     if foreground || cfg!(windows) {
-        let status = command.status()?;
+        let status = command.status();
+        let _ = fs::remove_file(&credentials);
+        let status = status?;
         ensure!(
             status.success(),
             "rclone mount failed; see {}",
@@ -199,6 +202,7 @@ pub fn run(
     for _ in 0..60 {
         if let Some(status) = child.try_wait()? {
             db.unset("mount")?;
+            let _ = fs::remove_file(&credentials);
             anyhow::bail!("rclone mount exited ({status}); see {}", log.display());
         }
         if is_mounted(&mounted.path)? {
@@ -212,6 +216,7 @@ pub fn run(
     // Keep the record if the OS mounted at the timeout boundary.
     if !is_mounted(&mounted.path)? {
         db.unset("mount")?;
+        let _ = fs::remove_file(&credentials);
     }
     anyhow::bail!(
         "mount did not become ready within 30s; see {}",
@@ -267,6 +272,8 @@ pub fn unmount(db: &Store) -> Result<()> {
         }
     }
     db.unset("mount")?;
+    // rclone was given a copy of the refresh credential; do not leave it behind.
+    let _ = fs::remove_file(mounted.config.with_file_name("credentials.json"));
     println!(
         "Unmounted {}. Cached writes are retained for the next mount.",
         mounted.path.display()
