@@ -38,6 +38,7 @@ def main():
             shutil.copytree(ROOT / 'docs/configuration', folder / 'docs/configuration')
         for url, destination in [
             ('https://curl.se/ca/cacert.pem', 'cacert.pem'),
+            ('https://raw.githubusercontent.com/googleapis/google-cloud-rust/main/LICENSE', 'GOOGLE-SDK-LICENSE.txt'),
             ('https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.0/LICENSE.txt', 'OPENSSL-LICENSE.txt'),
             ('https://www.mozilla.org/media/MPL/2.0/index.txt', 'CA-LICENSE.txt'),
         ]:

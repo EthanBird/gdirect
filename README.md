@@ -96,4 +96,4 @@ gdirect unmount                  # Windows foreground mount: Ctrl-C
 
 Repeat a download/upload command after an interruption to resume. Uploads use 8 MiB chunks and create new files; they do not overwrite existing names. Mount writes upload through a local cache with a 5 GiB cleanup target (open/pending files may exceed it). Wait for uploads before unmounting; the mount command prints the log path. Mount traffic follows system routing; direct CLI transfers require system TUN software to route selected IPs directly.
 
-Credentials, scanned IPs and settings use local SQLite: macOS `~/Library/Application Support/gdirect/state.sqlite3`, Linux `~/.local/share/gdirect/state.sqlite3`, Windows `%LOCALAPPDATA%\gdirect\state.sqlite3`. Override with `--db PATH`. `GDIRECT_ACCESS_TOKEN` is also supported.
+Credentials, scanned IPs and settings use local SQLite: macOS `~/Library/Application Support/gdirect/state.sqlite3`, Linux `~/.local/share/gdirect/state.sqlite3`, Windows `%LOCALAPPDATA%\gdirect\state.sqlite3`. Override with `--db PATH`. `GDIRECT_ACCESS_TOKEN` is also supported for CLI transfers; mounting needs the refreshable login above.

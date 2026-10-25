@@ -75,7 +75,7 @@ fn sdk_token(data: Value, endpoint: &str) -> Result<String> {
             .map_err(|_| anyhow::anyhow!("invalid Google user credentials"))?;
         let token = tokio::time::timeout(Duration::from_secs(45), credentials.access_token()).await
             .context("Google token refresh timed out; check access to oauth2.googleapis.com")?
-            .map_err(|_| anyhow::anyhow!("Google credential refresh failed; sign in again with gdirect login --client-secret PATH"))?;
+            .map_err(|_| anyhow::anyhow!("Google credential refresh failed; run gdirect login --reauth to authorize again"))?;
         Ok(token.token)
     })
 }

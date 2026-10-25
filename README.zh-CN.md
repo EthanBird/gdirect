@@ -96,4 +96,4 @@ gdirect unmount                  # Windows 前台挂载按 Ctrl-C 停止
 
 上传或下载中断后，重复同一命令续传。上传采用 8 MiB 分块并创建新文件，不覆盖云端同名文件。挂载写入通过本地缓存上传，缓存清理目标为 5 GiB（使用中或等待上传的文件可超出）；卸载前等待上传完成，日志路径由挂载命令打印。挂载走系统路由；CLI 直连传输需要系统 TUN 软件将选定 IP 路由为直连。
 
-凭据、IP 和设置保存在本机 SQLite：macOS 为 `~/Library/Application Support/gdirect/state.sqlite3`，Linux 为 `~/.local/share/gdirect/state.sqlite3`，Windows 为 `%LOCALAPPDATA%\gdirect\state.sqlite3`。可用 `--db PATH` 改路径，也支持 `GDIRECT_ACCESS_TOKEN`。
+凭据、IP 和设置保存在本机 SQLite：macOS 为 `~/Library/Application Support/gdirect/state.sqlite3`，Linux 为 `~/.local/share/gdirect/state.sqlite3`，Windows 为 `%LOCALAPPDATA%\gdirect\state.sqlite3`。可用 `--db PATH` 改路径，CLI 传输也支持 `GDIRECT_ACCESS_TOKEN`；挂载需要上面的可刷新登录。
