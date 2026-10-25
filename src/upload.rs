@@ -300,7 +300,8 @@ impl Api {
                 }
                 Ok(r) => return Err(failure(r)),
             }
-            if failures >= 40 {
+            if failures >= 12 {
+                let _ = db.unset(&key);
                 bail!("upload interrupted; rerun the same command to resume");
             }
             if failures > 0 {
