@@ -14,6 +14,7 @@ use std::{
 
 const CHUNK: u64 = 16 * 1024 * 1024;
 const FINAL_SLICE: u64 = 1024 * 1024;
+const FINAL_COMMIT_HOLD: u64 = 1280 * 1024;
 const FIELDS: &str = "id,name,mimeType,size,md5Checksum";
 #[derive(Serialize, Deserialize)]
 struct Session {
@@ -275,22 +276,27 @@ impl Api {
                 Ok(r) if r.status() == StatusCode::UNAUTHORIZED => {
                     token = self.download_token()?;
                     failures += 1;
-                    probe = true;
+                    if start + FINAL_COMMIT_HOLD < size {
+                        probe = true;
+                    }
                 }
                 Ok(r)
                     if r.status().is_server_error()
                         || r.status() == StatusCode::TOO_MANY_REQUESTS
                         || r.status() == StatusCode::FORBIDDEN =>
                 {
-                    let is_final_chunk = start + FINAL_SLICE >= size;
+                    let is_final_chunk = start + FINAL_COMMIT_HOLD >= size;
                     failures += 1;
                     if !is_final_chunk {
                         probe = true;
                     }
                 }
                 Err(_) => {
+                    let is_final_chunk = start + FINAL_COMMIT_HOLD >= size;
                     failures += 1;
-                    probe = true;
+                    if !is_final_chunk {
+                        probe = true;
+                    }
                 }
                 Ok(r) => return Err(failure(r)),
             }
