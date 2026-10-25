@@ -82,3 +82,22 @@
      requestLine += hd;
      requestLine += "\r\n";
    }
+--- a/src/Platform.cc
++++ b/src/Platform.cc
+@@ -119,11 +119,15 @@
+ 
+ #ifdef HAVE_OPENSSL
+ #  if OPENSSL_VERSION_NUMBER >= 0x30000000L
+-  // RC4 is in the legacy provider.
++#    ifdef ENABLE_BITTORRENT
++  // Only BitTorrent message stream encryption needs legacy RC4.
++  // HTTP-only portable builds must not depend on external provider modules.
+   legacy_provider_ = OSSL_PROVIDER_load(nullptr, "legacy");
+   if (!legacy_provider_) {
+     throw DL_ABORT_EX("OSSL_PROVIDER_load 'legacy' failed.");
+   }
++
++#    endif // ENABLE_BITTORRENT
+ 
+   default_provider_ = OSSL_PROVIDER_load(nullptr, "default");
+   if (!default_provider_) {

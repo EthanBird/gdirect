@@ -60,6 +60,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def main():
     with tempfile.TemporaryDirectory(prefix='gdirect-test-') as tmp:
         tmp = Path(tmp)
+        # Portable releases must work without the build machine's OpenSSL modules.
+        os.environ['OPENSSL_MODULES'] = str(tmp / 'no-openssl-modules')
         ssl_prefix = os.environ.get('OPENSSL_PREFIX')
         if sys.platform == 'darwin' and not ssl_prefix:
             ssl_prefix = subprocess.check_output(['brew','--prefix','openssl@3'],text=True).strip()
