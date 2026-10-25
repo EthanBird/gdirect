@@ -1,7 +1,8 @@
 use crate::store::Store;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -17,23 +18,43 @@ pub const CONFIG_GUIDE: &str =
 const TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/drive";
 
-fn required<'a>(data: &'a Value, field: &str) -> Result<&'a str> {
-    data[field]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .with_context(|| format!("credentials are missing {field}"))
+// Only these fields are kept, so an imported token_uri or credential source is ignored.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename = "authorized_user")]
+pub struct Credentials {
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    pub refresh_token: String,
 }
-pub fn normalize(data: Value) -> Result<Value> {
-    ensure!(
-        data["type"] == "authorized_user",
-        "expected authorized_user credentials, not a service account"
-    );
-    // Never accept an imported token_uri or arbitrary executable credential source.
-    Ok(
-        json!({"type": "authorized_user", "client_id": required(&data,"client_id")?,
-        "client_secret": data["client_secret"].as_str().unwrap_or(""),
-        "refresh_token": required(&data,"refresh_token")?}),
-    )
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Client {
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+}
+impl Credentials {
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let value: Value =
+            serde_json::from_slice(data).context("credentials are not valid JSON")?;
+        ensure!(
+            value["type"] == "authorized_user",
+            "expected authorized_user credentials, not a service account"
+        );
+        let credentials: Self = serde_json::from_value(value)
+            .context("credentials are missing client_id or refresh_token")?;
+        ensure!(
+            !credentials.client_id.is_empty() && !credentials.refresh_token.is_empty(),
+            "credentials are missing client_id or refresh_token"
+        );
+        Ok(credentials)
+    }
+    pub fn client(&self) -> Client {
+        Client {
+            client_id: self.client_id.clone(),
+            client_secret: self.client_secret.clone(),
+        }
+    }
 }
 fn adc_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS") {
@@ -49,19 +70,19 @@ fn adc_path() -> Option<PathBuf> {
     };
     Some(base.join("application_default_credentials.json"))
 }
-pub fn credentials(db: &Store) -> Result<Value> {
+pub fn credentials(db: &Store) -> Result<Credentials> {
     if let Some(raw) = db.setting("oauth_credentials")? {
-        return normalize(serde_json::from_str(&raw)?);
+        return Credentials::parse(raw.as_bytes());
     }
     if let Some(path) = adc_path().filter(|p| p.is_file()) {
-        return normalize(serde_json::from_slice(&fs::read(path)?)?);
+        return Credentials::parse(&fs::read(path)?);
     }
     bail!(
         "first login requires a Desktop OAuth client JSON: gdirect login --client-secret PATH\nSetup: {CONFIG_GUIDE}"
     )
 }
-pub fn token(data: &Value) -> Result<String> {
-    sdk_token(normalize(data.clone())?, TOKEN_URI)
+pub fn token(credentials: &Credentials) -> Result<String> {
+    sdk_token(serde_json::to_value(credentials)?, TOKEN_URI)
 }
 fn sdk_token(data: Value, endpoint: &str) -> Result<String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -84,9 +105,9 @@ pub fn prepare_login(
     client: Option<&Path>,
     import: Option<&Path>,
     reauth: bool,
-) -> Result<Value> {
+) -> Result<Credentials> {
     if let Some(path) = import {
-        return normalize(serde_json::from_slice(&fs::read(path)?)?);
+        return Credentials::parse(&fs::read(path).context("cannot read credentials JSON")?);
     }
     if let Some(path) = client {
         let data: Value =
@@ -95,12 +116,14 @@ pub fn prepare_login(
             data["installed"].is_object(),
             "download a Desktop app OAuth client JSON (web clients are not supported)"
         );
-        return browser_login(&data["installed"]);
+        let client = serde_json::from_value(data["installed"].clone())
+            .context("OAuth client JSON is missing client_id")?;
+        return browser_login(&client);
     }
     if reauth {
         let client = match db.setting("oauth_client")? {
             Some(raw) => serde_json::from_str(&raw)?,
-            None => credentials(db)?,
+            None => credentials(db)?.client(),
         };
         return browser_login(&client);
     }
@@ -134,13 +157,13 @@ fn callback(target: &str, state: &str) -> Result<Option<String>> {
             .clone(),
     ))
 }
-fn browser_login(client: &Value) -> Result<Value> {
-    let client_id = required(client, "client_id")?;
+fn browser_login(client: &Client) -> Result<Credentials> {
+    let client_id = client.client_id.as_str();
     ensure!(
         client_id.ends_with(".apps.googleusercontent.com"),
         "invalid Google OAuth client ID"
     );
-    let secret = client["client_secret"].as_str().unwrap_or("");
+    let secret = client.client_secret.as_str();
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     listener.set_nonblocking(true)?;
     let redirect = format!(
@@ -246,12 +269,17 @@ fn browser_login(client: &Value) -> Result<Value> {
         response.status()
     );
     let token: Value = response.json().map_err(|e| e.without_url())?;
-    Ok(
-        json!({"type":"authorized_user","client_id":client_id,"client_secret":secret,
-        "refresh_token":required(&token,"refresh_token")?}),
-    )
+    let refresh_token = token["refresh_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .context("Google did not return a refresh token")?;
+    Ok(Credentials {
+        client_id: client_id.into(),
+        client_secret: secret.into(),
+        refresh_token: refresh_token.into(),
+    })
 }
-pub fn export_credentials(data: &Value, path: &Path) -> Result<()> {
+pub fn export_credentials(credentials: &Credentials, path: &Path) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -265,7 +293,7 @@ pub fn export_credentials(data: &Value, path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
-    file.write_all(serde_json::to_string(&normalize(data.clone())?)?.as_bytes())?;
+    file.write_all(serde_json::to_string(credentials)?.as_bytes())?;
     Ok(())
 }
 #[cfg(test)]
@@ -304,7 +332,7 @@ mod tests {
             }
         });
         for _ in 0..2 {
-            assert_eq!(sdk_token(json!({"type":"authorized_user","client_id":"fixture","client_secret":"fixture","refresh_token":"fixture-refresh"}),&endpoint).unwrap(),"fixture-access");
+            assert_eq!(sdk_token(serde_json::json!({"type":"authorized_user","client_id":"fixture","client_secret":"fixture","refresh_token":"fixture-refresh"}),&endpoint).unwrap(),"fixture-access");
         }
         server.join().unwrap();
     }
@@ -331,7 +359,19 @@ mod tests {
     }
     #[test]
     fn imported_credentials_cannot_redirect_tokens() {
-        let value=normalize(json!({"type":"authorized_user","client_id":"test","client_secret":"test","refresh_token":"test","token_uri":"https://evil.test"})).unwrap();
+        let credentials = Credentials::parse(br#"{"type":"authorized_user","client_id":"test","client_secret":"test","refresh_token":"test","token_uri":"https://evil.test"}"#).unwrap();
+        let value = serde_json::to_value(&credentials).unwrap();
         assert!(value.get("token_uri").is_none());
+        assert_eq!(value["type"], "authorized_user");
+        assert!(
+            Credentials::parse(
+                br#"{"type":"service_account","client_id":"a","refresh_token":"b"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            Credentials::parse(br#"{"type":"authorized_user","client_id":"a","refresh_token":""}"#)
+                .is_err()
+        );
     }
 }

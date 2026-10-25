@@ -104,9 +104,10 @@ impl Api {
         let email = self.account_for_token(&token)?;
         db.set("oauth_credentials", &serde_json::to_string(&credentials)?)?;
         if client.is_some() {
-            db.set("oauth_client", &serde_json::to_string(&serde_json::json!({
-                "client_id": credentials["client_id"], "client_secret": credentials["client_secret"]
-            }))?)?;
+            db.set(
+                "oauth_client",
+                &serde_json::to_string(&credentials.client())?,
+            )?;
         }
         db.save_auth(&email, &token)?;
         Ok(email)
