@@ -46,16 +46,15 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y libssl-dev pkg-config
           fi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
       - uses: actions/cache@v4
         id: native-cache
         with:
           path: target/libaria2
-          key: aria2-${{ matrix.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-libaria2.sh', 'vendor/**') }}
-      - if: steps.native-cache.outputs.cache-hit != 'true'
-        run: ./scripts/build-libaria2.sh
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.target }}
+          key: aria2-v2-${{ matrix.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-libaria2.sh', 'vendor/**') }}
+      - run: test -f target/libaria2/lib/libaria2.a || ./scripts/build-libaria2.sh
       - run: cargo fmt --check
       - run: cargo test --locked --target ${{ matrix.target }}
       - run: cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
@@ -110,17 +109,16 @@ jobs:
       - name: Configure OpenSSL prefix
         shell: msys2 {0}
         run: echo "OPENSSL_PREFIX=$(cygpath -m /mingw64)" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows-gnu
       - uses: actions/cache@v4
         id: native-cache
         with:
           path: target/libaria2
-          key: aria2-windows-gnu-${{ hashFiles('scripts/build-libaria2.sh', 'vendor/**') }}
-      - if: steps.native-cache.outputs.cache-hit != 'true'
-        shell: msys2 {0}
-        run: ./scripts/build-libaria2.sh
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-windows-gnu
+          key: aria2-v2-windows-gnu-${{ hashFiles('scripts/build-libaria2.sh', 'vendor/**') }}
+      - shell: msys2 {0}
+        run: test -f target/libaria2/lib/libaria2.a || ./scripts/build-libaria2.sh
       - shell: msys2 {0}
         run: |
           set -euo pipefail
