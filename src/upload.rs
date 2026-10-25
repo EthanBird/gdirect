@@ -113,15 +113,14 @@ impl Api {
                     StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 5 => {
                         std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
                     }
-                    _ => {
-                        session = None;
-                        resumed = true;
-                        break;
+                    _ if response.status().is_server_error() && attempt < 5 => {
+                        std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
                     }
+                    _ => return Err(failure(response)),
                 }
             }
             if !resumed {
-                session = None;
+                bail!("upload resume probe temporarily rate-limited; retry to resume from saved offset");
             }
         }
         let session = match session {
@@ -251,11 +250,11 @@ impl Api {
                 }
                 Ok(r) => return Err(failure(r)),
             }
-            if failures >= 4 {
+            if failures >= 10 {
                 bail!("upload interrupted; rerun the same command to resume");
             }
             if failures > 0 {
-                std::thread::sleep(Duration::from_secs(1 << failures));
+                std::thread::sleep(Duration::from_secs((1u64 << failures.min(4)).min(15)));
             }
         }
     }
