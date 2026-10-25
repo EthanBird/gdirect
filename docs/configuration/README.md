@@ -2,37 +2,46 @@
 
 [中文](README.zh-CN.md) · [Back to README](../../README.md)
 
-gdirect signs in with an OAuth client that you create in your own Google Cloud project. Expect about 10 minutes, once. Google does not charge for this, and gdirect never ships or uses anyone else's client.
+gdirect signs in with an OAuth client that you create in your own Google Cloud project. You only do this once, and it takes about 10 minutes. Google does not charge for it, and gdirect never ships or uses anyone else's client.
 
 ## 1. Create a Desktop OAuth client
 
-1. Open the [Google Cloud console](https://console.cloud.google.com/) and select or create a project.
-2. Enable the [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com) for that project.
-3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview) and click **Get started**. Under **Branding**, enter an app name and your email. For **Audience**, choose **External**.
-4. Under **Data Access**, click **Add or remove scopes** and add `https://www.googleapis.com/auth/drive`. Browsing existing files, downloading, uploading and writable mounts all need it.
-5. Under **Clients**, click **Create client**, choose application type **Desktop app**, and download the JSON. A web client, an API key or a service-account JSON will not work.
-6. Under **Audience**, click **Publish app** to move it from **Testing** to **In production**. This is recommended for personal use. While the app is in Testing, Google expires your sign-in after **7 days** and you have to run `gdirect login --reauth` again. A published app does not need Google's verification for your own use. You will just see the warning screen described below.
+Follow [Create a Google OAuth client](google-cloud.md). It walks through the Google Cloud console with screenshots. When you finish, you will have:
 
-   If you would rather stay in Testing, add your Google account under **Audience → Test users** instead.
+- a Google Cloud project with the Drive API enabled;
+- an OAuth app with the Drive scope, and your account allowed to sign in;
+- a downloaded **Desktop app** client JSON.
 
 ## 2. Sign in
+
+Run this in a terminal, replacing the path with the JSON file you downloaded:
 
 ```sh
 gdirect login --client-secret ~/Downloads/client_secret.json
 ```
 
-On Windows PowerShell, use `"$HOME\Downloads\client_secret.json"`, and in both cases your actual file name.
+On Windows PowerShell, write the path as `"$HOME\Downloads\client_secret.json"`, again with your actual file name.
 
-1. A browser opens on this computer. If it does not, copy the printed URL into a browser **on the same computer**, because the sign-in returns to a temporary local port.
-2. Choose your Google account.
-3. Google shows **"Google hasn't verified this app"**. This is expected, because it is your own app. Click **Advanced**, then **Go to *your app name* (unsafe)**. In Testing mode, click **Continue** instead.
-4. Allow access to Google Drive.
+1. A browser opens on this computer. If it does not, copy the URL printed in the terminal into a browser **on the same computer**. Google sends the sign-in back to a temporary local port, so another device will not work.
+2. Choose the Google account you added as a test user.
+3. Google warns that it has not verified the app. This is expected, because the app is your own.
+   - In Testing, click **Continue**. Do not click **Back to safety**.
+   - In production, click **Advanced**, then **Go to *your app name* (unsafe)**.
+
+   ![Unverified-app notice](images/12-unverified.png)
+
+4. Check that the app name and the Google Drive permission are what you expect, then click **Continue**.
+
+   ![Allow Drive access](images/13-consent.png)
+
 5. Return to the terminal and wait for `Logged in`.
 
-You can then delete the downloaded JSON. Its client is saved in gdirect's private database for later `--reauth`.
+You can now delete the downloaded JSON. gdirect keeps a private copy of the client for `gdirect login --reauth`.
+
+Check that it works:
 
 ```sh
-gdirect ls root     # quick check
+gdirect ls root     # lists the top of your Drive
 gdirect browse
 ```
 
@@ -40,10 +49,10 @@ gdirect browse
 
 | Problem | Fix |
 | --- | --- |
-| `access_denied` or "app is being tested" | Publish the app (step 6), or add this account as a test user |
-| `redirect_uri_mismatch` | The JSON is not a **Desktop app** client. Create one as in step 5 |
-| `Drive API 403 … insufficient permission` | Enable the Drive API in the **same** project as the client and add the Drive scope (step 4). Then run `gdirect login --reauth` and allow Drive access |
-| `refresh credential expired or revoked` | Run `gdirect login --reauth`. If this happens every 7 days, the app is still in Testing (step 6) |
+| `access_denied` or "app is being tested" | Add this account as a test user, or publish the app ([step 5](google-cloud.md#5-allow-your-account-to-sign-in)) |
+| `redirect_uri_mismatch` | The JSON is not a **Desktop app** client. Create one as in [step 4](google-cloud.md#4-create-a-desktop-client-and-download-its-json) |
+| `Drive API 403 … insufficient permission` | Enable the Drive API in the **same** project as the client ([step 1](google-cloud.md#1-create-a-project-and-enable-the-drive-api)) and save the Drive scope ([step 3](google-cloud.md#3-add-the-drive-scope)). Then run `gdirect login --reauth` and allow Drive access |
+| `refresh credential expired or revoked` | Run `gdirect login --reauth`. If this happens every 7 days, the app is still in Testing ([step 5](google-cloud.md#5-allow-your-account-to-sign-in)) |
 | Sign-in times out or shows a network error | Your system network must reach `oauth2.googleapis.com` and `accounts.google.com`; see [How it works](../../README.md#how-it-works) |
 | Wrong account, or switching accounts | `gdirect login --reauth`, then choose the other account |
 

@@ -6,33 +6,42 @@ gdirect 使用你在自己的 Google Cloud 项目里创建的 OAuth 客户端登
 
 ## 1. 创建桌面 OAuth 客户端
 
-1. 打开 [Google Cloud 控制台](https://console.cloud.google.com/)，选择或新建一个项目。
-2. 为该项目启用 [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com)。
-3. 打开 [Google Auth Platform](https://console.cloud.google.com/auth/overview)，点击 **Get started（开始）**。在 **Branding（品牌塑造）** 中填写应用名称和邮箱，**Audience（目标对象）** 选择 **External（外部）**。
-4. 在 **Data Access（数据访问）** 中点击 **Add or remove scopes（添加或移除范围）**，添加 `https://www.googleapis.com/auth/drive`。浏览已有文件、下载、上传和可写挂载都需要这项权限。
-5. 在 **Clients（客户端）** 中点击 **Create client（创建客户端）**，应用类型选择 **Desktop app（桌面应用）**，然后下载 JSON。网页客户端、API Key 和服务账号 JSON 都不能用。
-6. 推荐个人使用时在 **Audience（目标对象）** 中点击 **Publish app（发布应用）**，把状态从 **Testing（测试）** 改为 **In production（正式版）**。如果应用一直处于测试状态，登录 **7 天** 后就会过期，需要重新执行 `gdirect login --reauth`。自己使用的已发布应用不需要经过 Google 审核，只是登录时会看到下文提到的警告页。
+请按照[创建 Google OAuth 客户端](google-cloud.zh-CN.md)操作，文中配有每一步的截图。完成后你会得到：
 
-   如果想保持测试状态，请改为在 **Audience → Test users（测试用户）** 中添加自己的 Google 账号。
+- 一个已启用 Drive API 的 Google Cloud 项目；
+- 一个已添加 Drive 权限范围、并允许你的账号登录的 OAuth 应用；
+- 一个已下载的 **Desktop app（桌面应用）** 客户端 JSON。
 
 ## 2. 登录
+
+在终端执行下面的命令，把路径换成你下载的 JSON 文件：
 
 ```sh
 gdirect login --client-secret ~/Downloads/client_secret.json
 ```
 
-在 Windows PowerShell 中，路径写成 `"$HOME\Downloads\client_secret.json"`。无论哪个平台，都要换成你实际下载的文件名。
+在 Windows PowerShell 中，路径写成 `"$HOME\Downloads\client_secret.json"`，同样换成你实际下载的文件名。
 
-1. 程序会在本机打开浏览器。如果没有自动打开，请把终端里打印的链接复制到**同一台电脑**的浏览器中，因为授权完成后会回调到本机的临时端口。
-2. 选择你的 Google 账号。
-3. 页面会显示 **"Google hasn't verified this app"（Google 尚未验证此应用）**。这是正常的，因为这是你自己创建的应用。点击 **Advanced（高级）**，再点击 **Go to 你的应用名 (unsafe)（转至……（不安全））**。如果应用处于测试状态，直接点击 **Continue（继续）**。
-4. 允许访问 Google 云端硬盘。
+1. 程序会在这台电脑上打开浏览器。如果没有自动打开，请把终端里打印的链接复制到**同一台电脑**的浏览器中。授权完成后会回调到本机的临时端口，所以不能在手机或其他电脑上打开。
+2. 选择刚才添加为测试用户的 Google 账号。
+3. Google 会提示此应用未经验证。这是正常的，因为这是你自己创建的应用。
+   - 测试状态：点击 **继续（Continue）**，不要点击 **返回到安全网页（Back to safety）**。
+   - 正式版：点击 **Advanced（高级）**，再点击 **Go to 你的应用名 (unsafe)（转至……（不安全））**。
+
+   ![未验证应用提示](images/12-unverified.png)
+
+4. 核对应用名称和 Google 云端硬盘权限，确认无误后点击 **继续（Continue）**。
+
+   ![确认 Drive 授权](images/13-consent.png)
+
 5. 回到终端，等待显示 `Logged in`。
 
-登录完成后可以删除这个 JSON 文件。客户端信息已保存在 gdirect 的私有数据库中，以后执行 `--reauth` 时会用到。
+登录完成后可以删除下载的 JSON 文件。gdirect 已保存了一份客户端信息，以后执行 `gdirect login --reauth` 时会用到。
+
+检查是否可用：
 
 ```sh
-gdirect ls root     # 快速检查
+gdirect ls root     # 列出云端硬盘根目录
 gdirect browse
 ```
 
@@ -40,10 +49,10 @@ gdirect browse
 
 | 现象 | 处理方法 |
 | --- | --- |
-| `access_denied` 或提示应用正在测试 | 按第 6 步发布应用，或把当前账号加为测试用户 |
-| `redirect_uri_mismatch` | 这个 JSON 不是 **Desktop app** 客户端，按第 5 步重新创建 |
-| `Drive API 403 … insufficient permission` | 在客户端所在的**同一个项目**中启用 Drive API，并按第 4 步添加 Drive 权限范围；然后执行 `gdirect login --reauth` 并允许访问云端硬盘 |
-| `refresh credential expired or revoked` | 执行 `gdirect login --reauth`。如果每 7 天出现一次，说明应用仍处于测试状态（见第 6 步） |
+| `access_denied` 或提示应用正在测试 | 把当前账号加为测试用户，或发布应用（见[第 5 步](google-cloud.zh-CN.md#5-允许你的账号登录)） |
+| `redirect_uri_mismatch` | 这个 JSON 不是 **Desktop app** 客户端，按[第 4 步](google-cloud.zh-CN.md#4-创建桌面客户端并下载-json)重新创建 |
+| `Drive API 403 … insufficient permission` | 在客户端所在的**同一个项目**中启用 Drive API（[第 1 步](google-cloud.zh-CN.md#1-新建项目并启用-drive-api)），并保存 Drive 权限范围（[第 3 步](google-cloud.zh-CN.md#3-添加-drive-权限范围)）；然后执行 `gdirect login --reauth` 并允许访问云端硬盘 |
+| `refresh credential expired or revoked` | 执行 `gdirect login --reauth`。如果每 7 天出现一次，说明应用仍处于测试状态（见[第 5 步](google-cloud.zh-CN.md#5-允许你的账号登录)） |
 | 登录超时或报网络错误 | 系统网络需要能访问 `oauth2.googleapis.com` 和 `accounts.google.com`，见[工作原理](../../README.zh-CN.md#工作原理) |
 | 登错账号或需要切换账号 | 执行 `gdirect login --reauth`，选择另一个账号 |
 
