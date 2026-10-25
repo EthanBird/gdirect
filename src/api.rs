@@ -43,13 +43,25 @@ pub struct Api {
 }
 impl Api {
     pub fn new(db: PathBuf, ip: Option<IpAddr>) -> Result<Self> {
+        let endpoint_ip = ip.or_else(|| {
+            Store::open(&db)
+                .ok()
+                .and_then(|s| s.best_ip().ok().flatten())
+        });
         let mut builder = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(30));
-        if let Some(ip) = ip {
+        if let Some(ip) = endpoint_ip {
             builder = builder.resolve("www.googleapis.com", SocketAddr::new(ip, 443));
+            if let Some(bind_ip) = crate::net::local_bind_ip()
+                && bind_ip.is_ipv4() == ip.is_ipv4()
+            {
+                builder = builder.local_address(bind_ip);
+            }
+        } else if let Some(bind_ip) = crate::net::local_bind_ip() {
+            builder = builder.local_address(bind_ip);
         }
         Ok(Self {
             client: builder.build()?,
@@ -85,18 +97,30 @@ impl Api {
         Ok(token.access_token)
     }
     fn account_for_token(&self, token: &str) -> Result<String> {
-        let response = self
-            .client
-            .get("https://www.googleapis.com/drive/v3/about")
-            .query(&[("fields", "user(emailAddress)")])
-            .bearer_auth(token)
-            .send()
-            .map_err(|e| e.without_url())?;
-        let data = checked(response)?;
-        Ok(data["user"]["emailAddress"]
-            .as_str()
-            .context("Drive API did not return an account")?
-            .into())
+        let mut last_err = None;
+        for attempt in 0..8 {
+            let response = self
+                .client
+                .get("https://www.googleapis.com/drive/v3/about")
+                .query(&[("fields", "user(emailAddress)")])
+                .bearer_auth(token)
+                .send()
+                .map_err(|e| e.without_url())?;
+            match checked(response) {
+                Ok(data) => {
+                    return Ok(data["user"]["emailAddress"]
+                        .as_str()
+                        .context("Drive API did not return an account")?
+                        .into());
+                }
+                Err(e) if e.to_string().contains("Quota exceeded") && attempt < 7 => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap())
     }
     pub fn login(
         &self,
@@ -121,25 +145,36 @@ impl Api {
     fn get(&self, path: &str, query: &[(String, String)]) -> Result<serde_json::Value> {
         let token = self.token()?;
         let url = format!("https://www.googleapis.com/drive/v3/{path}");
-        let mut response = self
-            .client
-            .get(&url)
-            .query(query)
-            .bearer_auth(token)
-            .send()
-            .map_err(|e| e.without_url())?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            && std::env::var_os("GDIRECT_ACCESS_TOKEN").is_none()
-        {
-            response = self
+        let mut last_err = None;
+        for attempt in 0..8 {
+            let mut response = self
                 .client
                 .get(&url)
                 .query(query)
-                .bearer_auth(self.refresh()?)
+                .bearer_auth(&token)
                 .send()
                 .map_err(|e| e.without_url())?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && std::env::var_os("GDIRECT_ACCESS_TOKEN").is_none()
+            {
+                response = self
+                    .client
+                    .get(&url)
+                    .query(query)
+                    .bearer_auth(self.refresh()?)
+                    .send()
+                    .map_err(|e| e.without_url())?;
+            }
+            match checked(response) {
+                Ok(val) => return Ok(val),
+                Err(e) if e.to_string().contains("Quota exceeded") && attempt < 7 => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                }
+                Err(e) => return Err(e),
+            }
         }
-        checked(response)
+        Err(last_err.unwrap())
     }
     pub fn list(&self, folder: &str) -> Result<Vec<File>> {
         ensure!(crate::drive::valid_id(folder), "invalid folder ID");

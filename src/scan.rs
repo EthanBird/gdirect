@@ -76,14 +76,19 @@ fn candidates(db: &Store, path: Option<&Path>) -> Result<Vec<IpAddr>> {
 }
 // A missing or changed public test file is reported as a warning, not as a dead IP.
 fn probe(ip: IpAddr) -> Result<(i64, Option<String>)> {
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(5))
         .resolve("www.googleapis.com", SocketAddr::new(ip, 443))
-        .resolve("drive.usercontent.google.com", SocketAddr::new(ip, 443))
-        .build()?;
+        .resolve("drive.usercontent.google.com", SocketAddr::new(ip, 443));
+    if let Some(bind_ip) = crate::net::local_bind_ip()
+        && bind_ip.is_ipv4() == ip.is_ipv4()
+    {
+        builder = builder.local_address(bind_ip);
+    }
+    let client = builder.build()?;
     let start = Instant::now();
     let response = client
         .get("https://www.googleapis.com/drive/v3/about?fields=user")

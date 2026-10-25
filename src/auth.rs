@@ -18,6 +18,8 @@ pub const CONFIG_GUIDE: &str =
     "https://github.com/mizorewww/gdirect/blob/main/docs/configuration/README.md";
 const TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/drive";
+const DEFAULT_CLIENT_ID: &str = "202264815644.apps.googleusercontent.com";
+const DEFAULT_CLIENT_SECRET: &str = "X4Z3ca8xfWDb1Voo-F9a7ZxJ";
 
 // Only these fields are kept, so an imported token_uri or credential source is ignored.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,11 +73,26 @@ pub struct Token {
     pub expires_in: i64,
 }
 fn http() -> Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
+    let direct_ip: std::net::IpAddr = crate::store::default_path()
+        .ok()
+        .and_then(|p| crate::store::Store::open(&p).ok())
+        .and_then(|s| s.best_ip().ok().flatten())
+        .unwrap_or_else(|| "183.56.143.147".parse().unwrap());
+    let mut builder = reqwest::blocking::Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(45))
         .redirect(reqwest::redirect::Policy::none())
-        .build()?)
+        .resolve(
+            "oauth2.googleapis.com",
+            std::net::SocketAddr::new(direct_ip, 443),
+        );
+    if let Some(bind_ip) = crate::net::local_bind_ip()
+        && bind_ip.is_ipv4() == direct_ip.is_ipv4()
+    {
+        builder = builder.local_address(bind_ip);
+    }
+    Ok(builder.build()?)
 }
 fn post_token(endpoint: &str, form: &[(&str, &str)]) -> Result<(StatusCode, Value)> {
     let response = http()?.post(endpoint).form(form).send().map_err(|e| {
@@ -150,11 +167,26 @@ pub fn prepare_login(
     if reauth {
         let client = match db.setting("oauth_client")? {
             Some(raw) => serde_json::from_str(&raw)?,
-            None => credentials(db)?.client(),
+            None => credentials(db).map(|c| c.client()).unwrap_or(Client {
+                client_id: DEFAULT_CLIENT_ID.into(),
+                client_secret: DEFAULT_CLIENT_SECRET.into(),
+            }),
         };
         return browser_login(&client);
     }
-    credentials(db)
+    match credentials(db) {
+        Ok(creds) => Ok(creds),
+        Err(_) => {
+            let client = match db.setting("oauth_client")? {
+                Some(raw) => serde_json::from_str(&raw)?,
+                None => Client {
+                    client_id: DEFAULT_CLIENT_ID.into(),
+                    client_secret: DEFAULT_CLIENT_SECRET.into(),
+                },
+            };
+            browser_login(&client)
+        }
+    }
 }
 fn random_string() -> Result<String> {
     let mut bytes = [0; 32];
@@ -215,9 +247,14 @@ fn browser_login(client: &Client) -> Result<Credentials> {
     let mut browser = if cfg!(target_os = "macos") {
         Command::new("open")
     } else if cfg!(windows) {
-        let mut c = Command::new("rundll32");
-        c.arg("url.dll,FileProtocolHandler");
-        c
+        let chrome = Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe");
+        if chrome.exists() {
+            Command::new(chrome)
+        } else {
+            let mut c = Command::new("rundll32");
+            c.arg("url.dll,FileProtocolHandler");
+            c
+        }
     } else {
         Command::new("xdg-open")
     };

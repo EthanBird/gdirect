@@ -12,6 +12,15 @@ pub fn now() -> i64 {
         .as_secs() as i64
 }
 pub fn default_path() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("GDIRECT_DB")
+        && !p.trim().is_empty()
+    {
+        return Ok(PathBuf::from(p));
+    }
+    let e_drive = Path::new("E:\\");
+    if e_drive.exists() {
+        return Ok(e_drive.join("gdirect\\state.sqlite3"));
+    }
     Ok(dirs::data_local_dir()
         .context("cannot locate local data directory")?
         .join("gdirect/state.sqlite3"))

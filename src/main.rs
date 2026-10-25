@@ -3,6 +3,7 @@ mod auth;
 mod download;
 mod drive;
 mod mount;
+mod net;
 mod scan;
 mod store;
 mod tui;
@@ -83,7 +84,7 @@ enum Commands {
         #[arg(default_value = "root")]
         folder: String,
         /// Download directory
-        #[arg(short, long, default_value = "downloads")]
+        #[arg(short, long, default_value = "E:\\gdirect\\downloads")]
         output: PathBuf,
         #[command(flatten)]
         transfer: Transfer,
@@ -164,7 +165,7 @@ fn run(cli: Cli) -> Result<()> {
     };
     let command = cli.command.unwrap_or_else(|| Commands::Browse {
         folder: "root".into(),
-        output: "downloads".into(),
+        output: "E:\\gdirect\\downloads".into(),
         transfer: Transfer::default(),
     });
     match command {
@@ -319,7 +320,7 @@ fn start_download(
         .or_else(|| {
             metadata
                 .as_ref()
-                .map(|meta| api::destination(std::path::Path::new("downloads"), meta))
+                .map(|meta| api::destination(std::path::Path::new("E:\\gdirect\\downloads"), meta))
         })
         .context("public download requires -o FILE")?;
     download::run(

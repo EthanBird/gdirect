@@ -15,6 +15,10 @@ struct Mounted {
     config: PathBuf,
 }
 fn default_mount() -> Result<PathBuf> {
+    let e_drive = Path::new("E:\\");
+    if e_drive.exists() {
+        return Ok(e_drive.join("GoogleDrive"));
+    }
     Ok(dirs::home_dir()
         .context("cannot locate home directory")?
         .join("GoogleDrive"))

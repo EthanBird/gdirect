@@ -84,54 +84,94 @@ impl Api {
         let mut start = 0;
         let mut session = saved.filter(|s| s.size == size && s.modified == modified);
         if let Some(s) = &session {
-            let response = self
-                .client
-                .put(session_url(&s.url)?)
-                .bearer_auth(&token)
-                .header("Content-Range", format!("bytes */{size}"))
-                .header("Content-Length", 0)
-                .send()
-                .map_err(|e| e.without_url())?;
-            match response.status() {
-                StatusCode::OK | StatusCode::CREATED => {
-                    let result = response.json()?;
-                    db.unset(&key)?;
-                    return Ok(result);
+            let mut resumed = false;
+            for attempt in 0..6 {
+                let response = self
+                    .client
+                    .put(session_url(&s.url)?)
+                    .bearer_auth(&token)
+                    .header("Content-Range", format!("bytes */{size}"))
+                    .header("Content-Length", 0)
+                    .send()
+                    .map_err(|e| e.without_url())?;
+                match response.status() {
+                    StatusCode::OK | StatusCode::CREATED => {
+                        let result = response.json()?;
+                        db.unset(&key)?;
+                        return Ok(result);
+                    }
+                    StatusCode::PERMANENT_REDIRECT => {
+                        start = offset(&response, size)?;
+                        resumed = true;
+                        break;
+                    }
+                    StatusCode::NOT_FOUND | StatusCode::GONE => {
+                        session = None;
+                        resumed = true;
+                        break;
+                    }
+                    StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if attempt < 5 => {
+                        std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                    }
+                    _ => {
+                        session = None;
+                        resumed = true;
+                        break;
+                    }
                 }
-                StatusCode::PERMANENT_REDIRECT => start = offset(&response, size)?,
-                StatusCode::NOT_FOUND | StatusCode::GONE => session = None,
-                _ => return Err(failure(response)),
+            }
+            if !resumed {
+                session = None;
             }
         }
         let session = match session {
             Some(s) => s,
             None => {
-                let response = self
-                    .client
-                    .post("https://www.googleapis.com/upload/drive/v3/files")
-                    .query(&[
-                        ("uploadType", "resumable"),
-                        ("supportsAllDrives", "true"),
-                        ("fields", FIELDS),
-                    ])
-                    .bearer_auth(&token)
-                    .header("X-Upload-Content-Type", "application/octet-stream")
-                    .header("X-Upload-Content-Length", size)
-                    .json(&serde_json::json!({"name": name, "parents": [parent]}))
-                    .send()
-                    .map_err(|e| e.without_url())?;
-                if !response.status().is_success() {
-                    return Err(failure(response));
+                let mut raw_loc = None;
+                let mut last_resp = None;
+                for attempt in 0..8 {
+                    let response = self
+                        .client
+                        .post("https://www.googleapis.com/upload/drive/v3/files")
+                        .query(&[
+                            ("uploadType", "resumable"),
+                            ("supportsAllDrives", "true"),
+                            ("fields", FIELDS),
+                        ])
+                        .bearer_auth(&token)
+                        .header("X-Upload-Content-Type", "application/octet-stream")
+                        .header("X-Upload-Content-Length", size)
+                        .json(&serde_json::json!({"name": name, "parents": [parent]}))
+                        .send()
+                        .map_err(|e| e.without_url())?;
+                    if response.status().is_success() {
+                        raw_loc = Some(
+                            response
+                                .headers()
+                                .get("location")
+                                .context("missing upload session")?
+                                .to_str()?
+                                .to_owned(),
+                        );
+                        break;
+                    }
+                    if (response.status() == StatusCode::FORBIDDEN
+                        || response.status() == StatusCode::TOO_MANY_REQUESTS)
+                        && attempt < 7
+                    {
+                        std::thread::sleep(Duration::from_millis(800 * (attempt + 1)));
+                        continue;
+                    }
+                    last_resp = Some(response);
+                    break;
                 }
-                let raw = response
-                    .headers()
-                    .get("location")
-                    .context("missing upload session")?
-                    .to_str()?;
+                let Some(raw) = raw_loc else {
+                    return Err(failure(last_resp.unwrap()));
+                };
                 let s = Session {
                     size,
                     modified,
-                    url: session_url(raw)?.into(),
+                    url: session_url(&raw)?.into(),
                 };
                 db.set(&key, &serde_json::to_string(&s)?)?;
                 s
@@ -199,7 +239,8 @@ impl Api {
                 }
                 Ok(r)
                     if r.status().is_server_error()
-                        || r.status() == StatusCode::TOO_MANY_REQUESTS =>
+                        || r.status() == StatusCode::TOO_MANY_REQUESTS
+                        || r.status() == StatusCode::FORBIDDEN =>
                 {
                     failures += 1;
                     probe = true;
