@@ -334,7 +334,56 @@ impl Api {
             let len = m.map(|x| x.len()).unwrap_or(u64::MAX);
             (is_dir, len, e.file_name())
         });
-        for entry in entries {
+        let (small_files, others): (Vec<_>, Vec<_>) = entries.into_iter().partition(|e| {
+            e.metadata()
+                .map(|m| m.is_file() && m.len() <= 8 * 1024 * 1024)
+                .unwrap_or(false)
+        });
+        if !small_files.is_empty() {
+            let queue = std::sync::Mutex::new(small_files.into_iter());
+            let workers = 4;
+            std::thread::scope(|scope| {
+                for _ in 0..workers {
+                    scope.spawn(|| {
+                        loop {
+                            let Some(entry) = queue.lock().unwrap().next() else {
+                                break;
+                            };
+                            let child_path = entry.path();
+                            for attempt in 0..15 {
+                                match self.upload_tree(&child_path, &folder.id, None) {
+                                    Ok(()) => break,
+                                    Err(e) if attempt < 14 => {
+                                        eprintln!(
+                                            "warning: retrying {} ({e:#})",
+                                            child_path.display()
+                                        );
+                                        std::thread::sleep(Duration::from_secs(3));
+                                    }
+                                    Err(e) => {
+                                        if let Ok(db) = Store::open(&self.db) {
+                                            let _ = db.record_activity(
+                                                "UPLOAD",
+                                                "FAILED",
+                                                &child_path.display().to_string(),
+                                                None,
+                                                None,
+                                                Some(&format!("{e:#}")),
+                                            );
+                                        }
+                                        eprintln!(
+                                            "error uploading {}: {e:#}",
+                                            child_path.display()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        for entry in others {
             let child_path = entry.path();
             for attempt in 0..15 {
                 match self.upload_tree(&child_path, &folder.id, None) {

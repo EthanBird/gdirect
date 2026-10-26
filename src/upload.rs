@@ -90,9 +90,66 @@ impl Api {
             .setting(&key)?
             .map(|s| serde_json::from_str::<Session>(&s))
             .transpose()?;
-        let mut token = self.download_token()?;
+        let mut token = self.token()?;
         let mut start = 0;
         let mut session = saved.filter(|s| s.size == size && s.modified == modified);
+        // Fast-path single-request multipart upload for small files (<= 8 MiB)
+        if size <= 8 * 1024 * 1024 && session.is_none() {
+            let mut body_bytes = Vec::with_capacity(size as usize + 512);
+            let boundary = "gdirect_multipart_boundary_7f3a9c";
+            let meta_json = serde_json::json!({"name": name, "parents": [parent]}).to_string();
+            let header_part = format!(
+                "--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta_json}\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n"
+            );
+            body_bytes.extend_from_slice(header_part.as_bytes());
+            file.seek(SeekFrom::Start(0))?;
+            file.read_to_end(&mut body_bytes)?;
+            body_bytes.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+            let content_type = format!("multipart/related; boundary={boundary}");
+            for attempt in 0..20 {
+                let resp = self
+                    .client
+                    .post("https://www.googleapis.com/upload/drive/v3/files")
+                    .query(&[
+                        ("uploadType", "multipart"),
+                        ("supportsAllDrives", "true"),
+                        ("fields", FIELDS),
+                    ])
+                    .bearer_auth(&token)
+                    .header("Content-Type", &content_type)
+                    .body(body_bytes.clone())
+                    .send();
+                match resp {
+                    Ok(r) if r.status().is_success() => {
+                        let result: File = r.json()?;
+                        let _ = db.record_activity(
+                            "UPLOAD",
+                            "COMPLETED",
+                            name,
+                            Some(&result.id),
+                            Some(size),
+                            Some(&format!("parent={parent} (multipart)")),
+                        );
+                        return Ok(result);
+                    }
+                    Ok(r) if r.status() == StatusCode::UNAUTHORIZED => {
+                        token = self.download_token()?;
+                    }
+                    Ok(r)
+                        if (r.status() == StatusCode::FORBIDDEN
+                            || r.status() == StatusCode::TOO_MANY_REQUESTS
+                            || r.status().is_server_error())
+                            && attempt < 19 =>
+                    {
+                        std::thread::sleep(Duration::from_millis(1200));
+                    }
+                    _ if attempt < 5 => {
+                        std::thread::sleep(Duration::from_millis(1000));
+                    }
+                    _ => break,
+                }
+            }
+        }
         if let Some(s) = &session {
             let mut resumed = false;
             for attempt in 0..30 {
